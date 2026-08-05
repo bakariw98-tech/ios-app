@@ -76,3 +76,23 @@ export const TRANSCRIBER = {
   model: 'nova-3',
   language: 'en',
 } as const;
+
+/**
+ * Recording is off.
+ *
+ * Vapi records by default. Several states require all-party consent to *record*,
+ * which is a separate question from consent to talk to an AI — our disclosure
+ * covers the latter and does not obviously cover the former. Rather than leave
+ * that unresolved while real calls happen, recording is disabled until someone
+ * decides deliberately.
+ *
+ * Transcripts still work (that's the transcriber, not the recorder), so post-call
+ * analysis and summaries are unaffected. See ADR-004, "Adjacent, unresolved".
+ *
+ * If you turn this on, the disclosure's consent question has to mention
+ * recording — and that changes a frozen string, so read docs/compliance.md first.
+ */
+export const ARTIFACT_PLAN = {
+  recordingEnabled: false,
+  videoRecordingEnabled: false,
+} as const;

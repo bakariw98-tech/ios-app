@@ -21,6 +21,7 @@ import {
 } from '../domain/disclosure.js';
 import { type Intent, renderIntentForPrompt } from '../domain/intent.js';
 import {
+  ARTIFACT_PLAN,
   TRANSCRIBER,
   VOICE_DELEGATE,
   realtimeModel,
@@ -87,6 +88,7 @@ export function delegateAssistant(intent: Intent, serverUrl: string) {
     model: realtimeModel(systemPrompt, 0.5),
     voice: realtimeVoice(VOICE_DELEGATE),
     transcriber: TRANSCRIBER,
+    artifactPlan: ARTIFACT_PLAN,
 
     maxDurationSeconds: 900,
     silenceTimeoutSeconds: 30,

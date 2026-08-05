@@ -10,6 +10,7 @@ import { intentJsonSchema } from '../domain/intent.js';
 import { MERGE_WINDOW_RULES } from '../domain/mergeWindow.js';
 import { SAFETY_PROMPT_RULES } from '../domain/safety.js';
 import {
+  ARTIFACT_PLAN,
   TRANSCRIBER,
   VOICE_INTERVIEW,
   realtimeModel,
@@ -86,6 +87,7 @@ export function interviewAssistant(serverUrl: string) {
     model: realtimeModel(SYSTEM_PROMPT, 0.7),
     voice: realtimeVoice(VOICE_INTERVIEW),
     transcriber: TRANSCRIBER,
+    artifactPlan: ARTIFACT_PLAN,
 
     // Long enough for someone to work up to it, bounded so a forgotten call
     // doesn't run forever.

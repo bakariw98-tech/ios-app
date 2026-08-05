@@ -11,6 +11,7 @@ Afterwards you get a summary of how it went.
 
 | | |
 | --- | --- |
+| [`docs/SETUP.md`](docs/SETUP.md) | Where the Vapi keys go and how to make the first call. |
 | [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md) | Scope and locked decisions. |
 | [`docs/compliance.md`](docs/compliance.md) | Why the flow is shaped this way, and the six rules enforced in code. |
 | [`docs/technical-decisions.md`](docs/technical-decisions.md) | ADRs answering the open Vapi questions. |
@@ -32,10 +33,15 @@ docs/      Brief, compliance reasoning, ADRs.
 ```bash
 cd backend
 npm install
-cp .env.example .env      # fill in Vapi credentials
+cp .env.example .env      # fill in Vapi credentials — see docs/SETUP.md
 npm run dev               # http://localhost:3000
-npm test                  # includes the compliance suite
+npm test                  # 53 tests, including the compliance suite
 ```
+
+`npm test` includes `test/lifecycle.test.ts`, which drives a whole call through
+the real webhook — interview, arming, the recipient arriving, handoff, end-of-call
+— with Vapi faked at the `fetch` boundary. The safety guards in it are
+mutation-tested; see the commit history for the five mutations they catch.
 
 The MCP connector runs separately over stdio:
 
@@ -55,8 +61,10 @@ connector, and 22 passing tests including the compliance assertions.
 **Not done:**
 
 - **Nothing has run against real Vapi.** Every assistant config here is written
-  from documentation, not from a call that happened. Expect the first live call
-  to surface shape mismatches.
+  from documentation, not from a call that happened. The lifecycle harness fakes
+  Vapi at the `fetch` boundary, so it proves our state machine is coherent — not
+  that our idea of Vapi's payloads is right. Expect the first live call to
+  surface shape mismatches.
 - **The iOS app has not been compiled** — no Swift toolchain where it was
   written. It also can't yet learn a call id, so the transcript and summary
   screens aren't reachable. See [`ios/README.md`](ios/README.md).
