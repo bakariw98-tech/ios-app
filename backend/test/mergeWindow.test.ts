@@ -104,9 +104,8 @@ describe('the prompt encodes the safe default', () => {
 
 describe('interview assistant wiring', () => {
   const assistant = interviewAssistant('https://example.test/webhook');
-  const toolNames = assistant.tools.map((t) =>
-    'function' in t ? t.function.name : t.type,
-  );
+  // Every tool variant carries a `function`, handoff included.
+  const toolNames = assistant.tools.map((t) => t.function.name);
 
   it('exposes arm and cancel alongside the handoff', () => {
     expect(toolNames).toContain('arm_for_merge');

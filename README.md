@@ -23,19 +23,22 @@ on, and it is deliberately built so no prompt can skip it.
 ## Layout
 
 ```
-backend/   Node + TypeScript. Vapi assistants, webhooks, MCP connector.
+backend/   Cloudflare Worker (Hono + D1). Vapi assistants, webhooks, MCP connector.
 ios/       SwiftUI sources. No Xcode project yet — see ios/README.md.
 docs/      Brief, compliance reasoning, ADRs.
 ```
 
 ## Backend
 
+The backend is a **Cloudflare Worker** backed by D1, deployed by GitHub Actions
+on push — see [`docs/SETUP.md`](docs/SETUP.md). Nothing needs to run locally.
+
 ```bash
 cd backend
-npm install
-cp .env.example .env      # fill in Vapi credentials — see docs/SETUP.md
-npm run dev               # http://localhost:3000
-npm test                  # 53 tests, including the compliance suite
+npm ci
+npm test                  # 59 tests, including the compliance suite
+npm run typecheck
+npx wrangler dev          # optional, local only
 ```
 
 `npm test` includes `test/lifecycle.test.ts`, which drives a whole call through
@@ -68,7 +71,6 @@ connector, and 22 passing tests including the compliance assertions.
 - **The iOS app has not been compiled** — no Swift toolchain where it was
   written. It also can't yet learn a call id, so the transcript and summary
   screens aren't reachable. See [`ios/README.md`](ios/README.md).
-- **Storage is in-memory.** Fine for a pilot on one instance, not for two.
 - **The merge step is unvalidated on real carriers.** This is the largest
   delivery risk in v1 — see ADR-001.
 
@@ -79,5 +81,4 @@ connector, and 22 passing tests including the compliance assertions.
 2. Build the carrier device matrix for three-way merge.
 3. Solve call-id association so the app can follow a live call (options in
    `ios/README.md`).
-4. Swap the in-memory store for Postgres.
-5. Engage counsel before opening this past a small pilot.
+4. Engage counsel before opening this past a small pilot.

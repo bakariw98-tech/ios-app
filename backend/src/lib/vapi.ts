@@ -7,37 +7,24 @@
  * defend if the capability simply does not exist in this codebase.
  */
 
-import { config } from './config.js';
-
-async function vapiFetch<T>(
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
-  const response = await fetch(`${config.vapi.baseUrl}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${config.vapi.apiKey}`,
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Vapi ${init.method ?? 'GET'} ${path} failed: ${response.status} ${body}`);
-  }
-
-  return response.json() as Promise<T>;
-}
-
 export interface VapiCall {
   id: string;
   status: string;
   monitor?: { controlUrl?: string; listenUrl?: string };
 }
 
-export function getCall(callId: string): Promise<VapiCall> {
-  return vapiFetch<VapiCall>(`/call/${callId}`);
+export async function getCall(
+  baseUrl: string,
+  apiKey: string,
+  callId: string,
+): Promise<VapiCall> {
+  const response = await fetch(`${baseUrl}/call/${callId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (!response.ok) {
+    throw new Error(`Vapi GET /call/${callId} failed: ${response.status}`);
+  }
+  return response.json() as Promise<VapiCall>;
 }
 
 /** Live call control: speak a specific line into the call right now. */

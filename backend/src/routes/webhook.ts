@@ -1,23 +1,22 @@
 /**
- * Vapi server webhook. One endpoint, switched on `message.type`. See ADR-003.
+ * Vapi server webhook. One route, switched on `message.type`. See ADR-003.
  *
  * Timing constraint: `assistant-request`, `tool-calls`,
  * `transfer-destination-request` and `handoff-destination-request` require a
  * response, and `assistant-request` has a ~7.5 second budget. Nothing slow may
- * happen inline on those paths.
+ * happen inline on those paths. (That budget is the reason this runs on
+ * Workers rather than a free-tier container that cold-starts — see docs/SETUP.md.)
  */
 
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { timingSafeEqual } from 'node:crypto';
+import type { Context, Hono } from 'hono';
 
+import type { AppBindings } from '../app.js';
 import { delegateAssistant } from '../assistants/delegate.js';
 import { interviewAssistant } from '../assistants/interview.js';
 import { assertValidDisclosure, buildDisclosure } from '../domain/disclosure.js';
 import { IntentSchema } from '../domain/intent.js';
 import { looksLikeNewParty, violatesQuietMode } from '../domain/mergeWindow.js';
 import { type BlockCategory, block } from '../domain/safety.js';
-import { config } from '../lib/config.js';
-import * as store from '../lib/store.js';
 import * as vapi from '../lib/vapi.js';
 
 interface VapiMessage {
@@ -27,15 +26,12 @@ interface VapiMessage {
   transcriptType?: string;
   role?: 'assistant' | 'user';
   transcript?: string;
+  variableValues?: unknown;
   toolCalls?: Array<{
     id: string;
     function: { name: string; arguments: Record<string, unknown> | string };
   }>;
-  artifact?: {
-    transcript?: string;
-    recordingUrl?: string;
-    messages?: unknown[];
-  };
+  artifact?: { transcript?: string; recordingUrl?: string };
   analysis?: {
     summary?: string;
     structuredData?: Record<string, unknown>;
@@ -44,60 +40,76 @@ interface VapiMessage {
   endedReason?: string;
 }
 
-function verifySecret(request: FastifyRequest): boolean {
-  const provided = request.headers['x-vapi-secret'];
-  if (typeof provided !== 'string') return false;
+type Ctx = Context<AppBindings>;
 
-  const a = Buffer.from(provided);
-  const b = Buffer.from(config.vapi.webhookSecret);
-  return a.length === b.length && timingSafeEqual(a, b);
+/**
+ * Constant-time comparison.
+ *
+ * Workers have no `node:crypto` `timingSafeEqual`, so this is the hand-rolled
+ * equivalent: fixed-length XOR accumulation with no early return.
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  if (provided.length !== expected.length) return false;
+  let difference = 0;
+  for (let i = 0; i < provided.length; i++) {
+    difference |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return difference === 0;
 }
 
-export async function webhookRoutes(app: FastifyInstance): Promise<void> {
-  app.post('/vapi/webhook', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!verifySecret(request)) {
+export function registerWebhookRoutes(app: Hono<AppBindings>): void {
+  app.post('/vapi/webhook', async (c) => {
+    const config = c.get('config');
+    const provided = c.req.header('x-vapi-secret');
+
+    if (!provided || !secretsMatch(provided, config.vapi.webhookSecret)) {
       // No body logging on unverified requests — they may be hostile, and the
       // bodies contain conversation content.
-      request.log.warn('Rejected webhook with bad or missing secret');
-      return reply.code(401).send({ error: 'unauthorized' });
+      console.warn('Rejected webhook with bad or missing secret');
+      return c.json({ error: 'unauthorized' }, 401);
     }
 
-    const message = (request.body as { message?: VapiMessage })?.message;
-    if (!message) return reply.code(400).send({ error: 'no message' });
+    const body = (await c.req.json().catch(() => null)) as {
+      message?: VapiMessage;
+    } | null;
+    const message = body?.message;
+    if (!message) return c.json({ error: 'no message' }, 400);
 
     const callId = message.call?.id;
 
     switch (message.type) {
       case 'status-update':
-        return reply.send(handleStatusUpdate(message, callId));
+        return c.json(await handleStatusUpdate(c, message, callId));
 
       case 'transcript':
-        return reply.send(handleTranscript(message, callId, request));
+        return c.json(await handleTranscript(c, message, callId));
 
       case 'tool-calls':
-        return reply.send(await handleToolCalls(message, callId));
+        return c.json(await handleToolCalls(c, message, callId));
 
       case 'handoff-destination-request':
-        return reply.send(handleHandoffRequest(message, callId, request));
+        return c.json(await handleHandoffRequest(c, message, callId));
 
       case 'assistant-request':
-        return reply.send({
-          assistant: interviewAssistant(config.webhookUrl),
-        });
+        return c.json({ assistant: interviewAssistant(config.webhookUrl) });
 
       case 'end-of-call-report':
-        return reply.send(handleEndOfCall(message, callId, request));
+        return c.json(await handleEndOfCall(c, message, callId));
 
       default:
-        return reply.send({});
+        return c.json({});
     }
   });
 }
 
-function handleStatusUpdate(message: VapiMessage, callId?: string) {
+async function handleStatusUpdate(
+  c: Ctx,
+  message: VapiMessage,
+  callId?: string,
+) {
   if (!callId) return {};
 
-  store.upsertCall(callId, {
+  await c.get('store').upsert(callId, {
     // controlUrl arrives with the call object; we need it for the disclosure
     // backstop, so capture it the first time we see it.
     ...(message.call?.monitor?.controlUrl && {
@@ -112,20 +124,17 @@ function handleStatusUpdate(message: VapiMessage, callId?: string) {
   return {};
 }
 
-function handleTranscript(
-  message: VapiMessage,
-  callId: string | undefined,
-  request: FastifyRequest,
-) {
+async function handleTranscript(c: Ctx, message: VapiMessage, callId?: string) {
   // Partials fire constantly; only keep finals.
   if (!callId || message.transcriptType !== 'final' || !message.transcript) {
     return {};
   }
 
+  const store = c.get('store');
   const role = message.role ?? 'user';
   const text = message.transcript;
 
-  store.appendTranscript(callId, {
+  await store.appendTranscript(callId, {
     role,
     text,
     at: new Date().toISOString(),
@@ -133,18 +142,18 @@ function handleTranscript(
 
   // Merge-window tripwire. Only meaningful while armed — in ordinary
   // conversation "hello" means nothing, and a long assistant turn is fine.
-  const record = store.getCall(callId);
+  const record = await store.get(callId);
   if (record?.phase === 'awaiting_recipient' && !record.disclosureDelivered) {
     // Note both parties arrive as role "user": the carrier merges them onto one
     // mono leg, so Vapi cannot tell them apart. That's exactly why this is a
     // coarse backstop and the model's ear is the primary detector.
     if (role === 'user' && looksLikeNewParty(text)) {
-      void forceDisclosure(callId, 'heard a greeting from a new party', request);
+      await forceDisclosure(c, callId, 'heard a greeting from a new party');
     } else if (role === 'assistant' && violatesQuietMode(text)) {
-      void forceDisclosure(
+      await forceDisclosure(
+        c,
         callId,
         'assistant broke quiet mode during the merge window',
-        request,
       );
     }
   }
@@ -164,41 +173,44 @@ function handleTranscript(
  * undisclosed one is the thing we exist to prevent.
  */
 async function forceDisclosure(
+  c: Ctx,
   callId: string,
   reason: string,
-  request: FastifyRequest,
 ): Promise<void> {
-  const record = store.getCall(callId);
+  const store = c.get('store');
+  const record = await store.get(callId);
+
   if (!record?.controlUrl || !record.userFirstName) {
-    request.log.error(
-      { callId, reason, hasControlUrl: Boolean(record?.controlUrl) },
-      'COMPLIANCE: needed to force disclosure but could not — no control URL or name',
+    console.error(
+      `COMPLIANCE: needed to force disclosure on ${callId} (${reason}) but ` +
+        'could not — no control URL or no user first name',
     );
     return;
   }
 
-  // Mark first: if the say() call is slow, a second transcript event must not
-  // race us into speaking it twice.
-  store.upsertCall(callId, {
-    disclosureDelivered: true,
+  // Claim atomically. Two webhook events arriving together must not both speak
+  // the introduction — on Workers those can genuinely run concurrently.
+  if (!(await store.claimDisclosure(callId))) return;
+
+  await store.upsert(callId, {
     backstopFired: true,
     handoffTrigger: 'server_backstop',
   });
 
-  request.log.error(
-    { callId, reason },
-    'COMPLIANCE BACKSTOP: forcing disclosure — the assistant should have ' +
+  console.error(
+    `COMPLIANCE BACKSTOP on ${callId}: ${reason}. The assistant should have ` +
       'handed off and did not. Review this call.',
   );
 
   try {
     await vapi.say(record.controlUrl, buildDisclosure(record.userFirstName));
   } catch (error) {
-    request.log.error({ err: error, callId }, 'Backstop say() failed');
+    console.error(`Backstop say() failed on ${callId}:`, error);
   }
 }
 
-async function handleToolCalls(message: VapiMessage, callId?: string) {
+async function handleToolCalls(c: Ctx, message: VapiMessage, callId?: string) {
+  const store = c.get('store');
   const results = [];
 
   for (const toolCall of message.toolCalls ?? []) {
@@ -226,7 +238,7 @@ async function handleToolCalls(message: VapiMessage, callId?: string) {
       }
 
       if (callId) {
-        store.upsertCall(callId, {
+        await store.upsert(callId, {
           phase: 'awaiting_recipient',
           armedAt: new Date().toISOString(),
           userFirstName,
@@ -246,7 +258,10 @@ async function handleToolCalls(message: VapiMessage, callId?: string) {
 
     if (toolCall.function.name === 'cancel_merge') {
       if (callId) {
-        store.upsertCall(callId, { phase: 'interviewing', armedAt: undefined });
+        await store.upsert(callId, {
+          phase: 'interviewing',
+          armedAt: undefined,
+        });
       }
       results.push({
         toolCallId: toolCall.id,
@@ -260,7 +275,7 @@ async function handleToolCalls(message: VapiMessage, callId?: string) {
       const refusal = block(category);
 
       if (callId) {
-        store.upsertCall(callId, {
+        await store.upsert(callId, {
           phase: 'blocked',
           blockedCategory: category,
         });
@@ -269,10 +284,7 @@ async function handleToolCalls(message: VapiMessage, callId?: string) {
       // Hand the assistant the exact words. The prompt tells it to say them
       // verbatim and stop — we don't let the model compose its own refusal for
       // these four categories.
-      results.push({
-        toolCallId: toolCall.id,
-        result: refusal.spokenRefusal,
-      });
+      results.push({ toolCallId: toolCall.id, result: refusal.spokenRefusal });
       continue;
     }
 
@@ -288,31 +300,24 @@ async function handleToolCalls(message: VapiMessage, callId?: string) {
 /**
  * Resolve the delegate assistant, built from the intent object Vapi extracted
  * during the interview.
- *
- * This is also where the disclosure backstop is armed. The disclosure is already
- * guaranteed by `firstMessage` + `assistant-speaks-first`; the backstop covers
- * the case where the delegate config fails to build at all, in which case we
- * would rather speak the disclosure and drop the call than let a half-configured
- * assistant address the recipient.
  */
-function handleHandoffRequest(
+async function handleHandoffRequest(
+  c: Ctx,
   message: VapiMessage,
-  callId: string | undefined,
-  request: FastifyRequest,
+  callId?: string,
 ) {
-  const parsed = IntentSchema.safeParse(
-    (message as unknown as { variableValues?: unknown }).variableValues,
-  );
+  const store = c.get('store');
+  const parsed = IntentSchema.safeParse(message.variableValues);
 
   if (!parsed.success) {
-    request.log.error(
-      { callId, issues: parsed.error.issues },
-      'Intent extraction failed at handoff',
+    console.error(
+      `Intent extraction failed at handoff on ${callId}:`,
+      parsed.error.issues,
     );
 
     // Fail closed and audibly. Never hand a recipient an assistant that does
     // not know what it is allowed to say.
-    void failClosed(callId, request);
+    await failClosed(c, callId);
 
     return {
       error:
@@ -321,20 +326,21 @@ function handleHandoffRequest(
   }
 
   const intent = parsed.data;
+
   if (callId) {
-    const previous = store.getCall(callId);
+    const previous = await store.get(callId);
 
     if (previous && previous.phase !== 'awaiting_recipient') {
       // The model jumped straight to handoff without arming. Not dangerous —
       // the delegate still opens with the disclosure — but it means the quiet
       // window never applied, so the interview was live right up to the join.
-      request.log.warn(
-        { callId, phase: previous.phase },
-        'Handoff without arming — merge window was skipped',
+      console.warn(
+        `Handoff without arming on ${callId} (phase: ${previous.phase}) — ` +
+          'merge window was skipped',
       );
     }
 
-    store.upsertCall(callId, {
+    await store.upsert(callId, {
       intent,
       phase: 'delegating',
       userFirstName: intent.userFirstName,
@@ -347,42 +353,35 @@ function handleHandoffRequest(
   return {
     destination: {
       type: 'assistant',
-      assistant: delegateAssistant(intent, config.webhookUrl),
+      assistant: delegateAssistant(intent, c.get('config').webhookUrl),
     },
   };
 }
 
-async function failClosed(
-  callId: string | undefined,
-  request: FastifyRequest,
-): Promise<void> {
+async function failClosed(c: Ctx, callId?: string): Promise<void> {
   if (!callId) return;
-  const record = store.getCall(callId);
+  const record = await c.get('store').get(callId);
   if (!record?.controlUrl) return;
 
   try {
     await vapi.say(
       record.controlUrl,
       "I'm sorry — something went wrong on my end and I'm not able to " +
-        "continue safely. Nothing has been said. Please try again.",
+        'continue safely. Nothing has been said. Please try again.',
       true,
     );
   } catch (error) {
-    request.log.error({ err: error, callId }, 'Fail-closed say() failed');
+    console.error(`Fail-closed say() failed on ${callId}:`, error);
   }
 }
 
-function handleEndOfCall(
-  message: VapiMessage,
-  callId: string | undefined,
-  request: FastifyRequest,
-) {
+async function handleEndOfCall(c: Ctx, message: VapiMessage, callId?: string) {
   if (!callId) return {};
 
   const analysis = message.analysis;
   const structured = analysis?.structuredData;
 
-  store.upsertCall(callId, {
+  await c.get('store').upsert(callId, {
     phase: 'ended',
     endedAt: new Date().toISOString(),
     summary: {
@@ -399,27 +398,21 @@ function handleEndOfCall(
   // affected. Surface loudly.
   if (structured) {
     if (structured.disclosureDelivered === false) {
-      request.log.error(
-        { callId },
-        'COMPLIANCE: call completed without AI disclosure — investigate now',
+      console.error(
+        `COMPLIANCE on ${callId}: completed without AI disclosure — investigate now`,
       );
     }
     if (structured.consentObtained === false) {
-      request.log.error(
-        { callId },
-        'COMPLIANCE: message delivered without recipient consent — investigate now',
+      console.error(
+        `COMPLIANCE on ${callId}: delivered without recipient consent — investigate now`,
       );
     }
     if (structured.boundariesRespected === false) {
-      request.log.error(
-        { callId },
-        'BOUNDARY VIOLATION: assistant raised something on the never-say list',
+      console.error(
+        `BOUNDARY VIOLATION on ${callId}: assistant raised a never-say item`,
       );
     }
   }
 
   return {};
 }
-
-/** Exported for tests. */
-export const _internal = { verifySecret, buildDisclosure };

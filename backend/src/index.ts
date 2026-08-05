@@ -1,11 +1,18 @@
+/**
+ * Cloudflare Worker entry point.
+ *
+ * The app is built per-request rather than at module scope so that config
+ * validation errors surface as a 500 with a useful message instead of killing
+ * the isolate at startup.
+ */
+
 import { buildApp } from './app.js';
-import { config } from './lib/config.js';
+import type { Env } from './lib/config.js';
 
-const app = await buildApp();
+const app = buildApp();
 
-try {
-  await app.listen({ port: config.port, host: '0.0.0.0' });
-} catch (error) {
-  app.log.error(error);
-  process.exit(1);
-}
+export default {
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    return app.fetch(request, env, ctx);
+  },
+};

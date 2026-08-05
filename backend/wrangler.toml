@@ -1,0 +1,26 @@
+name = "conversation-delegation"
+main = "src/index.ts"
+compatibility_date = "2025-05-05"
+compatibility_flags = ["nodejs_compat"]
+
+# Workers have no cold start, which is why the backend lives here: Vapi's
+# assistant-request has a ~7.5 second budget, and a free-tier container that
+# spins down would blow it and drop the call. See docs/SETUP.md.
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "conversation-delegation"
+database_id = "c533ed3b-93ac-4f3b-8802-ad5fd73dafb5"
+
+# Secrets are NOT set here — they'd end up in git. Set them with
+# `wrangler secret put <NAME>` or in the Cloudflare dashboard under
+# Workers → conversation-delegation → Settings → Variables and Secrets:
+#
+#   VAPI_API_KEY
+#   VAPI_WEBHOOK_SECRET
+#   VAPI_PHONE_NUMBER
+#   VAPI_PHONE_NUMBER_ID
+#   PUBLIC_SERVER_URL   (your workers.dev URL, no trailing slash)
