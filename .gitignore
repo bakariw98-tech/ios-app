@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+
+# Xcode
+.DS_Store
+xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
