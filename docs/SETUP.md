@@ -22,27 +22,52 @@ Already done, via this session:
   (`c533ed3b-93ac-4f3b-8802-ad5fd73dafb5`), schema applied.
 - `backend/wrangler.toml` references it by id.
 
-You need to create an **API token** so GitHub can deploy:
+## 2. Connect the repo to Cloudflare
 
-1. Cloudflare dashboard → **My Profile → API Tokens → Create Token**
-2. Use the **Edit Cloudflare Workers** template
-3. Add D1 permission: **Account → D1 → Edit**
-4. Create, copy the token (shown once)
+Cloudflare can pull from GitHub directly — **no GitHub secrets, no API token, no
+GitHub Actions.** This is the recommended path.
 
-Also grab your **Account ID** from the right-hand sidebar of any Cloudflare
-dashboard page.
+1. Cloudflare dashboard → **Workers & Pages** → **Create application**
+2. Next to **Import a repository**, choose **Get started**
+3. Authorise GitHub, pick **`bakariw98-tech/ios-app`**
+4. Set these — the first two matter, the defaults are wrong for this repo:
 
-## 2. GitHub secrets
+   | Field | Value |
+   | --- | --- |
+   | **Worker name** | `conversation-delegation` |
+   | **Root directory** | `backend` |
+   | **Build command** | `npm ci` |
+   | **Deploy command** | `npx wrangler deploy` |
+   | **Branch** | `claude/conversation-delegation-app-6m6kat` |
 
-Repo → **Settings → Secrets and variables → Actions → New repository secret**:
+5. **Save and Deploy**
 
-| Secret | Value |
-| --- | --- |
-| `CLOUDFLARE_API_TOKEN` | the token from step 1 |
-| `CLOUDFLARE_ACCOUNT_ID` | your account id |
+The Worker name **must** match the `name` in `backend/wrangler.toml`
+(`conversation-delegation`) or the build fails. Root directory must be `backend`
+because that's where `wrangler.toml` lives.
 
-That's all GitHub needs. Pushing to the feature branch or `main` now runs tests
-and deploys.
+After this, every push to that branch builds and deploys automatically.
+
+<details>
+<summary>Alternative: GitHub Actions (only if you prefer it)</summary>
+
+`.github/workflows/deploy.yml` does the same job and additionally runs the test
+suite before deploying. It needs two repository secrets:
+
+- Go to **https://github.com/bakariw98-tech/ios-app/settings/secrets/actions**
+- Add `CLOUDFLARE_API_TOKEN` (Cloudflare → My Profile → API Tokens → *Edit
+  Cloudflare Workers* template, plus **Account → D1 → Edit**)
+- Add `CLOUDFLARE_ACCOUNT_ID` (right sidebar of any Cloudflare dashboard page)
+
+If you can't find that page: it's the repo's **Settings** tab (far right of the
+repo nav, next to Insights) — *not* your account settings under your avatar. The
+GitHub mobile app doesn't show repo settings at all; use a desktop browser, or
+request the desktop site on mobile.
+
+Use one path or the other, not both — two deploy mechanisms racing on the same
+push is just confusing.
+
+</details>
 
 ## 3. Vapi
 
@@ -67,8 +92,12 @@ Variables and Secrets**. Add each as a **Secret** (not a plaintext variable):
 | `VAPI_WEBHOOK_SECRET` | **you invent this** — any long random string |
 | `PUBLIC_SERVER_URL` | your Worker URL, e.g. `https://conversation-delegation.<subdomain>.workers.dev` — no trailing slash |
 
-The Worker must exist before you can set these, so **push once first** to create
-it, then add the secrets, then push again (or hit **Retry deployment**).
+The Worker must exist before you can set these, so **let step 2 deploy once
+first**, then add the secrets, then hit **Retry deployment** (or push again).
+
+Until the secrets are set, the Worker returns `500 server misconfigured` and
+logs exactly which ones are missing — that's expected on the first deploy, not a
+broken build.
 
 ## 5. Point Vapi at the Worker
 
@@ -130,6 +159,11 @@ ORDER BY started_at DESC LIMIT 20;
   Transcripts and summaries still work — they come from the transcriber, not the
   recorder. Read `docs/compliance.md` before turning it on; it changes what the
   consent question has to say.
+- **Schema changes need applying by hand.** Workers Builds runs `wrangler deploy`
+  but not `wrangler d1 execute`, so a change to `schema.sql` won't reach D1 on
+  its own. Apply it in the Cloudflare dashboard (**Storage & Databases → D1 →
+  conversation-delegation → Console**) or run the manual GitHub Actions deploy,
+  which does apply it. The current schema is already live.
 - **The Worker never places calls.** The Vapi API key here reads call state and
   drives live-call control on a call the user already started. There is no
   outbound-call code path — see N4 in `docs/compliance.md`.

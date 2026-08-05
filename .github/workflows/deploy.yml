@@ -1,10 +1,12 @@
-name: Deploy backend
+name: Backend
 
-# Deploys the Worker on every push to the feature branch or main.
+# Tests run on every push. Deploy is manual-only.
 #
-# This exists so nobody has to run a command locally. Push, and GitHub Actions
-# runs tests then deploys. Secrets live in GitHub (repo → Settings → Secrets and
-# variables → Actions) and in Cloudflare — never in the repo.
+# The recommended deploy path is Cloudflare Workers Builds, which pulls from
+# this repo directly and needs no GitHub secrets (see docs/SETUP.md). If both
+# that and a push-triggered deploy here were active, two deploys would race on
+# every commit — so this workflow deploys only when you run it by hand from the
+# Actions tab, and only if CLOUDFLARE_API_TOKEN is set.
 
 on:
   push:
@@ -14,6 +16,9 @@ on:
     paths:
       - 'backend/**'
       - '.github/workflows/deploy.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
   workflow_dispatch:
 
 jobs:
@@ -38,6 +43,8 @@ jobs:
 
   deploy:
     needs: test
+    # Manual only — Workers Builds handles push deploys. See the header.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     defaults:
       run:
