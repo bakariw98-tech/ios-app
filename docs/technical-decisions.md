@@ -67,10 +67,12 @@ legally strongest option and the one the brief already describes.
   all on some MVNOs and some Wi-Fi-calling paths. This needs a real device matrix
   before launch. **This is the single largest delivery risk in v1.**
 - **Not programmatically triggerable.** There is no CallKit API to merge calls on
-  the user's behalf. The app can only *instruct*. The UI must teach this step
-  well, because it is the moment the product succeeds or fails.
-- **Not programmatically detectable.** The app cannot observe the merge. So the
-  handoff must be triggered another way — see ADR-002.
+  the user's behalf. The app can only *instruct* — and in practice the assistant
+  coaches it out loud, live, one step at a time, which works better than a
+  screen someone is not looking at mid-call. `MergeGuideView` is the reference
+  copy, not the primary teaching surface.
+- **Detectable by ear, not by API.** See ADR-004 — this turned out better than
+  first assessed.
 - If the device matrix comes back bad, the fallback is not "let the server dial."
   It is to revisit the flow with counsel, per the revisit triggers in
   `compliance.md`.
@@ -135,11 +137,103 @@ party is listening.
 
 ### Triggering the handoff
 
-Since the merge is undetectable (ADR-001), the handoff is triggered by the user
-saying an agreed phrase ("they're on the line" / "okay, they're here"), which the
-interview assistant is prompted to recognize. The backend independently arms a
-disclosure backstop over the control URL so that even a mistimed handoff cannot
-result in the recipient hearing the AI speak before the disclosure.
+See ADR-004. The original design used an agreed spoken phrase; it now triggers
+primarily on the assistant hearing the recipient arrive, with the phrase as one
+of several fallbacks.
+
+---
+
+## ADR-004 — Detecting that the recipient joined
+
+**Supersedes the "not programmatically detectable" conclusion in ADR-001.**
+
+### What's actually available
+
+Three things are true, and they point in different directions:
+
+1. **Vapi's `transcript` webhook carries only `role: "user" | "assistant"`.** No
+   speaker id, no channel, no diarization label. And because the carrier mixes
+   the conference onto one mono inbound leg, *the user and the recipient both
+   arrive as `role: "user"`.* There is no labeled signal in the webhook stream.
+2. **But the realtime model hears the raw audio.** `gpt-realtime` is
+   speech-to-speech; it receives the audio directly, not a transcript. A
+   different voice saying "Hello?" is highly salient to it. This is real
+   detection — it is just model judgement rather than a flag.
+3. **Deepgram diarization exists but doesn't reach us.** Nova-3 diarizes mono
+   multi-speaker audio (that is the point of diarization), but Vapi does not
+   surface the speaker label in the transcript event, so we cannot read it.
+
+### Decision: arm on intent, detect to time it
+
+The tempting design is "detect the recipient, then disclose." Its failure mode
+is the one thing this product must never do: detection misses, the assistant
+keeps talking to the user *about their situation*, and the recipient is silently
+listening, undisclosed.
+
+So the window is **armed on intent, not on detection**:
+
+- The instant the assistant starts coaching the merge, it calls `arm_for_merge`.
+- From then until handoff, the only things it may say are merge coaching and the
+  disclosure. It is told to **assume the recipient can already hear it**.
+- Detection then decides *when* the disclosure fires — never *whether*
+  something else could slip out first.
+
+This makes both failure modes safe:
+
+| | Cost |
+| --- | --- |
+| Missed the join | Assistant stays quiet; user says "they're on". A few awkward seconds. **Nothing leaks.** |
+| False alarm | Disclosure delivered to the user. Mild confusion, cleared up in one sentence. **Nothing leaks.** |
+
+Because both are safe, the model is explicitly instructed to resolve uncertainty
+toward handing off. That instruction is only defensible *because* of the arming
+inversion — without it, "when in doubt, speak" would be reckless.
+
+### Triggers, any of which fires the handoff
+
+1. The assistant hears a voice that isn't the user's *(primary)*
+2. It hears a greeting — "hello?", "who is this?" *(primary)*
+3. The user says the recipient is on *(fallback)*
+4. The assistant is simply unsure *(fallback)*
+5. Server backstop: a `role: "user"` transcript matching a
+   pick-up-the-phone greeting, or the assistant breaking quiet mode, while
+   armed → the backend speaks the disclosure itself over the control URL
+
+Trigger 5 should never fire. When it does it is logged at error level with the
+call id, because it means the model heard someone arrive and failed to act. It
+is a bug to investigate, not a metric to aggregate. `arm_for_merge` takes the
+user's first name precisely so the server can build the disclosure unaided at
+that moment.
+
+### A nice side effect
+
+The user no longer needs to remember a magic phrase. The recipient says
+"Hello?", and the assistant introduces itself — which is what a person would do,
+and removes the most artificial beat in the flow.
+
+### Upgrade path if the model's ear proves unreliable
+
+Vapi exposes `listenUrl`, a WebSocket stream of live call audio. We could
+consume it server-side, run streaming diarization (Deepgram `diarize: true`),
+and fire the handoff the moment the speaker count goes 1 → 2. That is a hard
+programmatic signal rather than a judgement call.
+
+Not built for v1: it is real infrastructure, diarization needs a few seconds of
+a new speaker before the label stabilises, and the model's ear is likely good
+enough. Revisit if live calls show missed joins.
+
+One flag if we do build it: ephemeral speaker clustering is not voiceprinting,
+but Illinois BIPA regulates "voiceprints" and the line is worth checking with
+counsel before persisting anything derived from a recipient's voice.
+
+### Adjacent, unresolved
+
+Vapi records calls by default (`recordingUrl` in the end-of-call artifacts).
+Several states require all-party consent to *record*, which is a separate
+question from consent to talk to an AI — the disclosure covers the latter, not
+obviously the former. Not addressed here. Worth resolving before a pilot; the
+cheap fix is disabling recording, and the cheaper-still fix is adding recording
+to the disclosure's consent question.
 
 ---
 

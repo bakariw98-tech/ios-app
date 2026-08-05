@@ -12,9 +12,11 @@
  */
 
 import type { Intent } from '../domain/intent.js';
+import type { HandoffTrigger } from '../domain/mergeWindow.js';
 
 export type CallPhase =
   | 'interviewing'
+  /** In the merge window — armed, quiet, waiting for the recipient. */
   | 'awaiting_recipient'
   | 'delegating'
   | 'ended'
@@ -44,6 +46,14 @@ export interface CallRecord {
   controlUrl?: string;
   /** Set once the disclosure has been observed or injected. Compliance backstop state. */
   disclosureDelivered: boolean;
+  /** When the merge window was armed, if it has been. */
+  armedAt?: string;
+  /** Captured at arm time so the server can speak the disclosure unaided. */
+  userFirstName?: string;
+  /** True if the server had to force the disclosure. Always a bug — investigate. */
+  backstopFired?: boolean;
+  /** What ended the merge window. Recorded for compliance review. */
+  handoffTrigger?: HandoffTrigger;
   blockedCategory?: string;
   transcript: TranscriptLine[];
   summary?: CallSummary;

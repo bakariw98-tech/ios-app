@@ -7,6 +7,7 @@
  */
 
 import { intentJsonSchema } from '../domain/intent.js';
+import { MERGE_WINDOW_RULES } from '../domain/mergeWindow.js';
 import { SAFETY_PROMPT_RULES } from '../domain/safety.js';
 import {
   TRANSCRIBER,
@@ -14,21 +15,6 @@ import {
   realtimeModel,
   realtimeVoice,
 } from './shared.js';
-
-/**
- * Phrases that mean "the recipient is on the line now."
- *
- * The merge is invisible to us (ADR-001), so this is how we learn it happened.
- * Kept in one place because the interview prompt, the iOS instructions, and the
- * webhook backstop all need to agree on it.
- */
-export const HANDOFF_PHRASES = [
-  "they're on",
-  "they're here",
-  "they're on the line",
-  'okay go ahead',
-  "we're all here",
-] as const;
 
 const SYSTEM_PROMPT = `
 You are the interview half of an assistant that helps people say things they find
@@ -78,20 +64,7 @@ Before handing off, say the plan back in three or four sentences — what you'll
 say, what you'll leave alone — and ask if you've got it right. People often
 correct one important thing at this exact moment. Take the correction.
 
-## Handing off
-
-When you have the plan confirmed, explain the merge step plainly:
-
-"Whenever you're ready — tap Add Call in your phone, dial them, and then tap
-Merge Calls. I'll be right here. As soon as they're on, just tell me and I'll
-introduce myself to them."
-
-Then wait. Do not fill the silence with chatter; they are operating their phone.
-
-When they tell you the recipient is on the line, call the \`begin_delegation\`
-handoff tool immediately. Do not greet the recipient yourself and do not say
-anything else first — the other half of you opens with a required introduction,
-and anything you say before it gets in the way of that.
+${MERGE_WINDOW_RULES}
 
 ## What happens next
 
@@ -133,8 +106,11 @@ export function interviewAssistant(serverUrl: string) {
         function: {
           name: 'begin_delegation',
           description:
-            'Hand off to the delegate assistant. Call this the moment the ' +
-            'user says the recipient has joined the call.',
+            'Hand off to the delegate assistant, which immediately introduces ' +
+            'itself to the recipient. Call this the instant you hear a voice ' +
+            'that is not the user, or the user says the recipient has joined, ' +
+            'or you are simply unsure whether someone new is on the line. ' +
+            'When in doubt, call it.',
         },
         destinations: [
           {
@@ -151,6 +127,40 @@ export function interviewAssistant(serverUrl: string) {
             variableExtractionPlan: { schema: intentJsonSchema() },
           },
         ],
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'arm_for_merge',
+          description:
+            'Call as soon as you begin coaching the user through adding the ' +
+            'recipient. Enters the merge window, after which you may only ' +
+            'discuss the merge steps or hand off — never the situation.',
+          parameters: {
+            type: 'object',
+            properties: {
+              userFirstName: {
+                type: 'string',
+                description:
+                  "The user's first name. Required so the introduction can " +
+                  'be prepared before the recipient arrives.',
+              },
+            },
+            required: ['userFirstName'],
+          },
+        },
+        server: { url: serverUrl },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'cancel_merge',
+          description:
+            'Call if the user backs out of adding the recipient. Leaves the ' +
+            'merge window and resumes the normal interview.',
+          parameters: { type: 'object', properties: {} },
+        },
+        server: { url: serverUrl },
       },
       {
         type: 'function' as const,

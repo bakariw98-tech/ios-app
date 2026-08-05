@@ -1,15 +1,16 @@
 import SwiftUI
 
-/// Teaches the merge step.
+/// Reference copy for the merge step.
 ///
-/// This is the highest-risk moment in the product. The app cannot perform the
-/// merge (there's no CallKit API for it) and cannot detect that it happened —
-/// see docs/technical-decisions.md, ADR-001. All we can do is explain it well
-/// enough that someone mid-difficult-phone-call can follow it.
+/// The app cannot perform the merge — there's no CallKit API for it (ADR-001).
+/// In practice the assistant coaches this out loud, one step at a time, which
+/// works better than a screen nobody is looking at mid-call. This view exists
+/// so the user can see the shape of it beforehand and glance back if they lose
+/// the thread; it is not the primary teaching surface.
 ///
-/// Hence: three steps, native control names in bold, and an explicit note that
-/// the assistant handles the introduction — so the user isn't left wondering
-/// whether they're supposed to explain the AI themselves.
+/// The last line matters most: it tells the user they don't have to explain the
+/// AI themselves. The assistant handles the introduction, and it does so
+/// automatically as soon as it hears someone new (ADR-004).
 struct MergeGuideView: View {
     let instruction: String
 
@@ -27,7 +28,7 @@ struct MergeGuideView: View {
         (
             "arrow.triangle.merge",
             "Tap **Merge Calls**",
-            "Then just tell me they're on, and I'll introduce myself."
+            "That's it — I'll hear them and introduce myself."
         ),
     ]
 
@@ -59,7 +60,7 @@ struct MergeGuideView: View {
             Divider()
 
             Label {
-                Text("I always tell them I'm an AI speaking for you, and ask if they're okay to continue, before I say anything else.")
+                Text("The moment I hear them, I tell them I'm an AI speaking for you and ask if they're okay to continue — before anything else. You don't have to explain me.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } icon: {

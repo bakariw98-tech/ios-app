@@ -12,8 +12,9 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { delegateAssistant } from '../assistants/delegate.js';
 import { interviewAssistant } from '../assistants/interview.js';
-import { buildDisclosure } from '../domain/disclosure.js';
+import { assertValidDisclosure, buildDisclosure } from '../domain/disclosure.js';
 import { IntentSchema } from '../domain/intent.js';
+import { looksLikeNewParty, violatesQuietMode } from '../domain/mergeWindow.js';
 import { type BlockCategory, block } from '../domain/safety.js';
 import { config } from '../lib/config.js';
 import * as store from '../lib/store.js';
@@ -71,7 +72,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         return reply.send(handleStatusUpdate(message, callId));
 
       case 'transcript':
-        return reply.send(handleTranscript(message, callId));
+        return reply.send(handleTranscript(message, callId, request));
 
       case 'tool-calls':
         return reply.send(await handleToolCalls(message, callId));
@@ -111,19 +112,90 @@ function handleStatusUpdate(message: VapiMessage, callId?: string) {
   return {};
 }
 
-function handleTranscript(message: VapiMessage, callId?: string) {
+function handleTranscript(
+  message: VapiMessage,
+  callId: string | undefined,
+  request: FastifyRequest,
+) {
   // Partials fire constantly; only keep finals.
   if (!callId || message.transcriptType !== 'final' || !message.transcript) {
     return {};
   }
 
+  const role = message.role ?? 'user';
+  const text = message.transcript;
+
   store.appendTranscript(callId, {
-    role: message.role ?? 'user',
-    text: message.transcript,
+    role,
+    text,
     at: new Date().toISOString(),
   });
 
+  // Merge-window tripwire. Only meaningful while armed — in ordinary
+  // conversation "hello" means nothing, and a long assistant turn is fine.
+  const record = store.getCall(callId);
+  if (record?.phase === 'awaiting_recipient' && !record.disclosureDelivered) {
+    // Note both parties arrive as role "user": the carrier merges them onto one
+    // mono leg, so Vapi cannot tell them apart. That's exactly why this is a
+    // coarse backstop and the model's ear is the primary detector.
+    if (role === 'user' && looksLikeNewParty(text)) {
+      void forceDisclosure(callId, 'heard a greeting from a new party', request);
+    } else if (role === 'assistant' && violatesQuietMode(text)) {
+      void forceDisclosure(
+        callId,
+        'assistant broke quiet mode during the merge window',
+        request,
+      );
+    }
+  }
+
   return {};
+}
+
+/**
+ * Speak the disclosure ourselves, right now.
+ *
+ * This should never fire — the model is meant to hand off, and the delegate's
+ * firstMessage is the disclosure. If we get here, either the model missed the
+ * recipient arriving or it started talking about the interview while someone
+ * new was listening. Both are bugs that need a human to look at the transcript.
+ *
+ * We say it anyway, because a duplicated introduction is a small cost and an
+ * undisclosed one is the thing we exist to prevent.
+ */
+async function forceDisclosure(
+  callId: string,
+  reason: string,
+  request: FastifyRequest,
+): Promise<void> {
+  const record = store.getCall(callId);
+  if (!record?.controlUrl || !record.userFirstName) {
+    request.log.error(
+      { callId, reason, hasControlUrl: Boolean(record?.controlUrl) },
+      'COMPLIANCE: needed to force disclosure but could not — no control URL or name',
+    );
+    return;
+  }
+
+  // Mark first: if the say() call is slow, a second transcript event must not
+  // race us into speaking it twice.
+  store.upsertCall(callId, {
+    disclosureDelivered: true,
+    backstopFired: true,
+    handoffTrigger: 'server_backstop',
+  });
+
+  request.log.error(
+    { callId, reason },
+    'COMPLIANCE BACKSTOP: forcing disclosure — the assistant should have ' +
+      'handed off and did not. Review this call.',
+  );
+
+  try {
+    await vapi.say(record.controlUrl, buildDisclosure(record.userFirstName));
+  } catch (error) {
+    request.log.error({ err: error, callId }, 'Backstop say() failed');
+  }
 }
 
 async function handleToolCalls(message: VapiMessage, callId?: string) {
@@ -134,6 +206,54 @@ async function handleToolCalls(message: VapiMessage, callId?: string) {
       typeof toolCall.function.arguments === 'string'
         ? (JSON.parse(toolCall.function.arguments) as Record<string, unknown>)
         : toolCall.function.arguments;
+
+    if (toolCall.function.name === 'arm_for_merge') {
+      const userFirstName = String(args.userFirstName ?? '').trim();
+
+      // Build the disclosure now, while there's still time to fail safely. If
+      // it can't be built we want to know before anyone is on the line, not at
+      // the moment we need to speak it.
+      try {
+        assertValidDisclosure(buildDisclosure(userFirstName));
+      } catch {
+        results.push({
+          toolCallId: toolCall.id,
+          result:
+            "I don't have the user's first name yet. Ask for it, then call " +
+            'arm_for_merge again before coaching them through the merge.',
+        });
+        continue;
+      }
+
+      if (callId) {
+        store.upsertCall(callId, {
+          phase: 'awaiting_recipient',
+          armedAt: new Date().toISOString(),
+          userFirstName,
+        });
+      }
+
+      results.push({
+        toolCallId: toolCall.id,
+        result:
+          'Merge window open. From now until you hand off: merge coaching and ' +
+          'reassurance only. Nothing about the situation — assume they can ' +
+          'already hear you. Hand off the moment you hear anyone who is not ' +
+          `${userFirstName}, or if you are unsure.`,
+      });
+      continue;
+    }
+
+    if (toolCall.function.name === 'cancel_merge') {
+      if (callId) {
+        store.upsertCall(callId, { phase: 'interviewing', armedAt: undefined });
+      }
+      results.push({
+        toolCallId: toolCall.id,
+        result: 'Merge window closed. Back to the interview as normal.',
+      });
+      continue;
+    }
 
     if (toolCall.function.name === 'flag_blocked_situation') {
       const category = args.category as BlockCategory;
@@ -202,7 +322,26 @@ function handleHandoffRequest(
 
   const intent = parsed.data;
   if (callId) {
-    store.upsertCall(callId, { intent, phase: 'delegating' });
+    const previous = store.getCall(callId);
+
+    if (previous && previous.phase !== 'awaiting_recipient') {
+      // The model jumped straight to handoff without arming. Not dangerous —
+      // the delegate still opens with the disclosure — but it means the quiet
+      // window never applied, so the interview was live right up to the join.
+      request.log.warn(
+        { callId, phase: previous.phase },
+        'Handoff without arming — merge window was skipped',
+      );
+    }
+
+    store.upsertCall(callId, {
+      intent,
+      phase: 'delegating',
+      userFirstName: intent.userFirstName,
+      // The delegate's firstMessage is the disclosure, so takeover delivers it.
+      disclosureDelivered: true,
+      handoffTrigger: previous?.handoffTrigger ?? 'voice_detected',
+    });
   }
 
   return {

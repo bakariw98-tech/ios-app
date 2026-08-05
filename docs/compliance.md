@@ -49,6 +49,7 @@ content category of the call.
 | N4 | No server-initiated outbound call to the recipient. | No outbound-call code path exists. The MCP connector deliberately omits `place_call`. |
 | N5 | The AI never claims to be human, even if asked to. | Delegate prompt hard rule + refusal handling. |
 | N6 | Hard-blocked categories are refused before a call can start. | `backend/src/domain/safety.ts`, checked during the interview and again before handoff. |
+| N7 | Nothing from the interview is spoken once the merge has begun, because the recipient may already be listening. | `backend/src/domain/mergeWindow.ts` — quiet mode from `arm_for_merge` until handoff, with a server-side tripwire. |
 
 ### N2 in particular
 
