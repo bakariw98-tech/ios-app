@@ -571,6 +571,14 @@ tests added so neither regresses unnoticed. Confirms the point this whole
 effort was built on: the value wasn't the client passing tests, it was
 finding out where reality disagreed with the docs before an iOS build did.
 
+**The step nothing here could substitute for did happen:** the user opened
+the live `/web` URL on their own phone and confirmed it works — heard the AI
+speak in response to a typed brief. That's the actual verification this
+whole effort was built toward; everything above only closes the gap up to
+that point. What's still unverified going into iOS: `stasel/WebRTC`'s
+specific Swift API surface, and echo cancellation on a real device speaker
+in a real room — both unchanged from earlier in this ADR.
+
 **Recommendation:** keep `/web` as an internal engineering tool (it's cheap
 — one route, one HTML string, one test file), not a second marketed product
 surface. Its job is narrowing what's still unproven before the iOS build: a
