@@ -57,10 +57,33 @@ function secretsMatch(provided: string, expected: string): boolean {
   return difference === 0;
 }
 
+/**
+ * Pull the shared secret off the request, whichever way Vapi was configured to
+ * send it.
+ *
+ * Vapi's dashboard offers two routes to the same thing — a custom HTTP header,
+ * or a "Bearer Token" credential which may or may not prepend `Bearer ` — and
+ * which one you get depends on where in the UI you set it up. Accepting all
+ * three shapes removes a configuration mismatch that is invisible from our side
+ * (it just looks like every webhook is unauthorised).
+ *
+ * This does not weaken anything: the same secret must match either way.
+ */
+function extractSecret(c: Ctx): string | null {
+  const direct = c.req.header('x-vapi-secret');
+  if (direct) return direct;
+
+  const authorization = c.req.header('authorization');
+  if (!authorization) return null;
+
+  const bearer = /^Bearer\s+(.+)$/i.exec(authorization);
+  return bearer ? bearer[1]!.trim() : authorization.trim();
+}
+
 export function registerWebhookRoutes(app: Hono<AppBindings>): void {
   app.post('/vapi/webhook', async (c) => {
     const config = c.get('config');
-    const provided = c.req.header('x-vapi-secret');
+    const provided = extractSecret(c);
 
     if (!provided || !secretsMatch(provided, config.vapi.webhookSecret)) {
       // No body logging on unverified requests — they may be hostile, and the

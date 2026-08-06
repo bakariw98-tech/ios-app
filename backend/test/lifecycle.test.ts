@@ -303,6 +303,46 @@ describe('webhook auth', () => {
     const response = await post({ type: 'status-update' }, SECRET.slice(0, -1));
     expect(response.status).toBe(401);
   });
+
+  // Vapi can be configured to send the shared secret as a custom header or as a
+  // "Bearer Token" credential, with or without the Bearer prefix, depending on
+  // where in its dashboard you set it up. All three must work — otherwise a
+  // mismatch looks identical to a wrong secret from our side.
+  const withHeader = (headers: Record<string, string>) =>
+    app.request(
+      '/vapi/webhook',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({
+          message: { type: 'status-update', call: { id: CALL_ID } },
+        }),
+      },
+      NO_ENV,
+    );
+
+  it('accepts the secret via Authorization with a Bearer prefix', async () => {
+    const response = await withHeader({ authorization: `Bearer ${SECRET}` });
+    expect(response.status).toBe(200);
+  });
+
+  it('accepts the secret via a bare Authorization header', async () => {
+    const response = await withHeader({ authorization: SECRET });
+    expect(response.status).toBe(200);
+  });
+
+  it('still rejects a wrong secret sent as a Bearer token', async () => {
+    const response = await withHeader({ authorization: 'Bearer nope' });
+    expect(response.status).toBe(401);
+  });
+
+  it('prefers x-vapi-secret when both headers are present', async () => {
+    const response = await withHeader({
+      'x-vapi-secret': SECRET,
+      authorization: 'Bearer nope',
+    });
+    expect(response.status).toBe(200);
+  });
 });
 
 describe('session routes', () => {

@@ -117,13 +117,27 @@ broken build.
 
 ## 5. Point Vapi at the Worker
 
-In Vapi, open your phone number and set:
+In Vapi, open your phone number (Phone Numbers → select it). The server form has:
 
-- **Server URL** → `<PUBLIC_SERVER_URL>/vapi/webhook`
-- **Server URL Secret** → the same string as `VAPI_WEBHOOK_SECRET`
+| Field | What to put |
+| --- | --- |
+| **Server URL** | `<PUBLIC_SERVER_URL>/vapi/webhook` |
+| **Timeout** | leave the default (20s is fine) |
+| **Authorization / Credential** | **No authentication** — leave it alone |
+| **HTTP Headers** | **Add Header** → name `x-vapi-secret`, value = your `VAPI_WEBHOOK_SECRET` |
 
-Vapi sends it as the `x-vapi-secret` header; the Worker compares it in constant
-time and drops anything that doesn't match.
+**Ignore the OAuth2 fields** (client ID, client secret, token URL). Those are a
+different, heavier auth mode with token refresh. You do not need them, and
+filling them in will not work.
+
+If your dashboard only offers a credential rather than a raw header, use
+Settings → Integrations → Server Configuration → **Add Custom Credential** →
+**Bearer Token**, set the header name to `x-vapi-secret`, and turn **off**
+"Include Bearer Prefix".
+
+Either route works: the Worker accepts the secret as `x-vapi-secret`, as
+`Authorization: Bearer <secret>`, or as a bare `Authorization` header, and
+compares it in constant time.
 
 **Do not create an assistant in the Vapi dashboard.** When a call comes in, Vapi
 asks our Worker what to do (`assistant-request`) and we return
