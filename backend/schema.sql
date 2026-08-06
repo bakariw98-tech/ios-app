@@ -39,3 +39,20 @@ CREATE TABLE IF NOT EXISTS transcript_lines (
 
 CREATE INDEX IF NOT EXISTS idx_transcript_call
   ON transcript_lines (call_id, id);
+
+-- Diagnostic log for the Vapi webhook secret handshake. Written on every
+-- POST to /vapi/webhook, success or failure, so a live "unauthorized" can be
+-- diagnosed by querying this table instead of needing log access we don't
+-- have.
+--
+-- Never stores the secret, a hash of it, or any fragment of it — only the
+-- header shape it arrived in, the length of the value that was sent, and
+-- whether it matched. See the comment on logAuthAttempt in
+-- src/routes/webhook.ts for why that's enough to diagnose a mismatch.
+CREATE TABLE IF NOT EXISTS auth_attempts (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  at              TEXT NOT NULL,
+  header_shape    TEXT NOT NULL,
+  provided_length INTEGER,
+  matched         INTEGER NOT NULL
+);

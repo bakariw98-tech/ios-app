@@ -354,6 +354,20 @@ describe('webhook auth', () => {
     });
     expect(response.status).toBe(200);
   });
+
+  // These don't assert on auth_attempts rows directly — MemoryStore-backed
+  // tests have no D1 binding (NO_ENV), so logAuthAttempt no-ops by design.
+  // What matters here is that missing the DB binding never breaks the
+  // request itself, success or failure, which is the actual safety property.
+  it('does not break a rejected request when no D1 binding is present', async () => {
+    const response = await withHeader({ 'x-vapi-secret': 'wrong' });
+    expect(response.status).toBe(401);
+  });
+
+  it('does not break an accepted request when no D1 binding is present', async () => {
+    const response = await withHeader({ 'x-vapi-secret': SECRET });
+    expect(response.status).toBe(200);
+  });
 });
 
 describe('session routes', () => {

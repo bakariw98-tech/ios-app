@@ -57,6 +57,17 @@ function secretsMatch(provided: string, expected: string): boolean {
   return difference === 0;
 }
 
+type SecretShape =
+  | 'x-vapi-secret'
+  | 'authorization-bearer'
+  | 'authorization-bare'
+  | 'none';
+
+interface ExtractedSecret {
+  value: string | null;
+  shape: SecretShape;
+}
+
 /**
  * Pull the shared secret off the request, whichever way Vapi was configured to
  * send it.
@@ -67,17 +78,68 @@ function secretsMatch(provided: string, expected: string): boolean {
  * three shapes removes a configuration mismatch that is invisible from our side
  * (it just looks like every webhook is unauthorised).
  *
- * This does not weaken anything: the same secret must match either way.
+ * This does not weaken anything: the same secret must match either way. The
+ * shape is returned alongside the value purely for `auth_attempts` logging —
+ * see `logAuthAttempt` below.
  */
-function extractSecret(c: Ctx): string | null {
+function extractSecret(c: Ctx): ExtractedSecret {
   const direct = c.req.header('x-vapi-secret');
-  if (direct) return direct;
+  if (direct) return { value: direct, shape: 'x-vapi-secret' };
 
   const authorization = c.req.header('authorization');
-  if (!authorization) return null;
+  if (!authorization) return { value: null, shape: 'none' };
 
   const bearer = /^Bearer\s+(.+)$/i.exec(authorization);
-  return bearer ? bearer[1]!.trim() : authorization.trim();
+  if (bearer) return { value: bearer[1]!.trim(), shape: 'authorization-bearer' };
+  return { value: authorization.trim(), shape: 'authorization-bare' };
+}
+
+/**
+ * Record enough about an auth attempt to diagnose a mismatch from the D1
+ * console, without ever storing anything that could reconstruct a secret.
+ *
+ * This exists because there is no log-tailing tool available in this
+ * deployment's tooling and no Vapi-side API for inspecting outbound webhook
+ * attempts — so when a live call reports "unauthorized," there was
+ * previously no way to tell whether Vapi ever reached this Worker at all,
+ * versus reaching it and being rejected, versus something failing before it
+ * even tried. This table answers that directly and queryably.
+ *
+ * Deliberately excluded, forever: the secret itself, any prefix or suffix of
+ * it, a hash of it, or anything else from which it could be recovered. Only
+ * the header shape, the provided value's *length*, and whether it matched.
+ * Length alone is enough to distinguish "nothing was sent," "the wrong
+ * value entirely was sent," and "something close but not identical was
+ * sent" — which covers the real failure modes (missing header, stale value,
+ * copy-paste truncation) without needing the content.
+ *
+ * Best-effort and fire-and-forget via `waitUntil`: a logging failure must
+ * never affect whether the request is accepted or rejected, and must never
+ * add latency to a path with a ~7.5 second budget.
+ */
+function logAuthAttempt(
+  c: Ctx,
+  shape: SecretShape,
+  providedLength: number | null,
+  matched: boolean,
+): void {
+  const db = c.env?.DB;
+  if (!db) return; // No D1 binding in tests — logging is best-effort only.
+
+  const insert = db
+    .prepare(
+      'INSERT INTO auth_attempts (at, header_shape, provided_length, matched) ' +
+        'VALUES (?, ?, ?, ?)',
+    )
+    .bind(new Date().toISOString(), shape, providedLength, matched ? 1 : 0)
+    .run()
+    .catch((error: unknown) => {
+      console.error('auth_attempts log failed:', error);
+    });
+
+  if (c.executionCtx) {
+    c.executionCtx.waitUntil(insert);
+  }
 }
 
 export function registerWebhookRoutes(app: Hono<AppBindings>): void {
@@ -91,9 +153,13 @@ export function registerWebhookRoutes(app: Hono<AppBindings>): void {
 
   app.post('/vapi/webhook', async (c) => {
     const config = c.get('config');
-    const provided = extractSecret(c);
+    const { value: provided, shape } = extractSecret(c);
+    const matched =
+      provided !== null && secretsMatch(provided, config.vapi.webhookSecret);
 
-    if (!provided || !secretsMatch(provided, config.vapi.webhookSecret)) {
+    logAuthAttempt(c, shape, provided?.length ?? null, matched);
+
+    if (!matched) {
       // No body logging on unverified requests — they may be hostile, and the
       // bodies contain conversation content.
       console.warn('Rejected webhook with bad or missing secret');
