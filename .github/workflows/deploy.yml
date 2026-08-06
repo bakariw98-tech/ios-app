@@ -67,11 +67,41 @@ jobs:
       # Cloudflare call happens to run first.
       - name: Verify Cloudflare credentials
         run: |
+          # Shape check before the API call. This never prints the token —
+          # only its length and whether it contains characters that cannot
+          # legally appear in an Authorization header. Cloudflare API tokens
+          # are 40 characters of [A-Za-z0-9_-].
+          len=${#CLOUDFLARE_API_TOKEN}
+          lines=$(printf '%s' "$CLOUDFLARE_API_TOKEN" | wc -l)
+          echo "Token length: $len (expected 40)"
+
+          if [ "$len" -eq 0 ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is empty or not set."
+            exit 1
+          fi
+
+          if [ "$lines" -ne 0 ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN contains a line break."
+            echo "::error::Re-copy it as a single line with no trailing newline."
+            exit 1
+          fi
+
+          if printf '%s' "$CLOUDFLARE_API_TOKEN" | LC_ALL=C grep -qv '^[A-Za-z0-9_-]*$'; then
+            echo "::error::CLOUDFLARE_API_TOKEN contains characters that aren't valid in a Cloudflare API token."
+            echo "::error::Expected exactly 40 characters of A-Z, a-z, 0-9, underscore or hyphen."
+            echo "::error::Usual causes: quotes pasted around the value, a stray space, or"
+            echo "::error::copying the whole 'Authorization: Bearer <token>' line instead of just the token."
+            exit 1
+          fi
+
+          if [ "$len" -ne 40 ]; then
+            echo "::warning::Token is $len characters; Cloudflare API tokens are normally 40."
+          fi
+
           if ! npx wrangler whoami; then
             echo "::error::Cloudflare rejected CLOUDFLARE_API_TOKEN."
             echo "::error::Check it is an API *Token* (My Profile → API Tokens → Create Token)."
             echo "::error::A Global API Key will NOT work here — different auth scheme."
-            echo "::error::Also check for a trailing newline or space in the secret value."
             exit 1
           fi
         env:
