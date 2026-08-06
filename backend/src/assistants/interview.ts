@@ -11,7 +11,6 @@ import { MERGE_WINDOW_RULES } from '../domain/mergeWindow.js';
 import { SAFETY_PROMPT_RULES } from '../domain/safety.js';
 import {
   ARTIFACT_PLAN,
-  TRANSCRIBER,
   VOICE_INTERVIEW,
   realtimeModel,
   realtimeVoice,
@@ -86,7 +85,11 @@ export function interviewAssistant(serverUrl: string) {
 
     model: realtimeModel(SYSTEM_PROMPT, 0.7),
     voice: realtimeVoice(VOICE_INTERVIEW),
-    transcriber: TRANSCRIBER,
+    // No transcriber field — OpenAI Realtime processes audio in and out
+    // natively and does its own transcription; a separate transcriber is for
+    // Vapi's traditional (non-realtime) pipeline. See the doc comment on
+    // REALTIME_MODEL in shared.ts for how setting one anyway broke real
+    // calls silently instead of erroring.
     artifactPlan: ARTIFACT_PLAN,
 
     // Long enough for someone to work up to it, bounded so a forgotten call

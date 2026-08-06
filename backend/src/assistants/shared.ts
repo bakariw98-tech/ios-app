@@ -94,17 +94,6 @@ export function realtimeVoice(voiceId: PreferredVoice): RealtimeVoiceConfig {
 }
 
 /**
- * Transcriber is still worth configuring even with a speech-to-speech model —
- * it's what populates the transcript artifacts we surface in-app and feed to
- * call analysis.
- */
-export const TRANSCRIBER = {
-  provider: 'deepgram',
-  model: 'nova-3',
-  language: 'en',
-} as const;
-
-/**
  * Recording is off.
  *
  * Vapi records by default. Several states require all-party consent to *record*,
@@ -113,8 +102,15 @@ export const TRANSCRIBER = {
  * that unresolved while real calls happen, recording is disabled until someone
  * decides deliberately.
  *
- * Transcripts still work (that's the transcriber, not the recorder), so post-call
- * analysis and summaries are unaffected. See ADR-004, "Adjacent, unresolved".
+ * Transcripts are unaffected by this — OpenAI Realtime produces its own
+ * transcript as part of the audio pipeline natively, relayed to us via the
+ * `transcript` serverMessage each assistant subscribes to (see
+ * interview.ts/delegate.ts), independent of recordingEnabled. (An earlier
+ * version of this comment said this was "the transcriber, not the recorder" —
+ * that assumed a separate Deepgram transcriber stage that was never actually
+ * needed or correct for a realtime assistant; see the removed TRANSCRIBER
+ * export's git history if that context matters.) See ADR-004, "Adjacent,
+ * unresolved".
  *
  * If you turn this on, the disclosure's consent question has to mention
  * recording — and that changes a frozen string, so read docs/compliance.md first.

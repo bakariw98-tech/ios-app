@@ -22,7 +22,6 @@ import {
 import { type Intent, renderIntentForPrompt } from '../domain/intent.js';
 import {
   ARTIFACT_PLAN,
-  TRANSCRIBER,
   VOICE_DELEGATE,
   realtimeModel,
   realtimeVoice,
@@ -87,7 +86,7 @@ export function delegateAssistant(intent: Intent, serverUrl: string) {
     // than find creative phrasings.
     model: realtimeModel(systemPrompt, 0.5),
     voice: realtimeVoice(VOICE_DELEGATE),
-    transcriber: TRANSCRIBER,
+    // No transcriber field — see the matching comment in interview.ts.
     artifactPlan: ARTIFACT_PLAN,
 
     maxDurationSeconds: 900,
