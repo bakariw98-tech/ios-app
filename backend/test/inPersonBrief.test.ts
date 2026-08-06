@@ -99,6 +99,18 @@ describe('buildInPersonInstructions', () => {
     expect(instructions).toMatch(/hedge, mumble, or undersell/i);
   });
 
+  // Real-world feedback: the model was front-loading every part of a
+  // multi-part brief into one opening statement instead of raising things
+  // conversationally, one at a time, the way a person actually would. This
+  // locks in the fix so it can't silently regress.
+  it('instructs pacing a multi-part brief across turns, not one opening dump', () => {
+    const instructions = buildInPersonInstructions({ situation: 'test' });
+    expect(instructions).toMatch(/more than one\s+conversational beat/i);
+    expect(instructions).toMatch(/open with the single most important\s+part/i);
+    expect(instructions).toMatch(/do not front-load/i);
+    expect(instructions).toMatch(/summarizes or lists every point.*at once/i);
+  });
+
   // This is the one property that most needs to hold: this mode has no
   // interview, no consent gate, no merge window — it must never assume one
   // exists. A stray reference to disclosure/consent here would mean someone

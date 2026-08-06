@@ -156,6 +156,32 @@ describe('buildIntakeInstructions', () => {
     expect(instructions).not.toMatch(/disclosure/i);
     expect(instructions).not.toMatch(/consent/i);
   });
+
+  // Real-world feedback: the model was walking a fixed topic checklist
+  // instead of reasoning about the user's actual goal and what stood between
+  // the situation and reaching it. Locks in the fix so it can't silently
+  // regress back into checklist-asking.
+  it('instructs reasoning about the goal before asking, not a fixed checklist', () => {
+    const instructions = buildIntakeInstructions({});
+    expect(instructions).toMatch(/what\s+.*is actually trying to achieve/i);
+    expect(instructions).toMatch(/the real goal underneath it/i);
+    expect(instructions).toMatch(/what stands\s*\n?\s*between the situation as described and actually reaching it/i);
+  });
+
+  it('prioritizes clarifying an unclear goal as the first question', () => {
+    const instructions = buildIntakeInstructions({});
+    expect(instructions).toMatch(/if the goal itself isn't clear yet, that's your first question/i);
+  });
+
+  it('asks about goal-relevant obstacles, not a generic "anything else"', () => {
+    const instructions = buildIntakeInstructions({});
+    expect(instructions).toMatch(/a constraint, a likely complication/i);
+  });
+
+  it('has the finalized paragraph state the goal, not just the surface request', () => {
+    const instructions = buildIntakeInstructions({});
+    expect(instructions).toMatch(/state the goal plainly, not just the surface request/i);
+  });
 });
 
 describe('buildIntakeMessages', () => {
