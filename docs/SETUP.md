@@ -22,6 +22,23 @@ Already done, via this session:
   (`c533ed3b-93ac-4f3b-8802-ad5fd73dafb5`), schema applied.
 - `backend/wrangler.toml` references it by id.
 
+## 1b. Register a workers.dev subdomain (one time, first Worker only)
+
+A brand-new Cloudflare account has no `*.workers.dev` subdomain, and `wrangler
+deploy` cannot create one non-interactively — it fails with *"You need to
+register a workers.dev subdomain before publishing to workers.dev."*
+
+Go to **https://dash.cloudflare.com** → **Workers & Pages** → it prompts you to
+choose a subdomain (or use the onboarding link printed in the failed deploy
+log). Pick anything available; it becomes the middle part of every Worker URL:
+
+```
+https://conversation-delegation.<your-subdomain>.workers.dev
+```
+
+That full URL is what goes in `PUBLIC_SERVER_URL` (step 4) and what Vapi points
+at (step 5). You only ever do this once per account.
+
 ## 2. Deploying
 
 **Active path: GitHub Actions.** `CLOUDFLARE_API_TOKEN` and
