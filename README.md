@@ -11,9 +11,11 @@ enough, because real conversation is dynamic — a follow-up question means
 stopping to type a whole new sentence and making everyone wait. This carries
 the live back-and-forth itself.
 
-**Two modes.** In-person is primary: type a quick brief, the AI starts talking
-it out loud immediately, live, standing right there with you — ordering food,
-asking for a refund, whatever the brief is. It listens and responds to
+**Two modes.** In-person is primary: type a quick brief, answer a couple of
+short typed follow-up questions from an AI (or skip straight past them — a
+one-tap escape hatch that always works), and the delegate AI starts talking
+it out loud immediately, live, standing right there with you — ordering
+food, asking for a refund, whatever the brief is. It listens and responds to
 whatever the other person says without the user re-typing every turn, and
 the user can interrupt or correct it with a single tap — never by having to
 speak — at any point. Phone-call mode is paused, not removed: call in, get
@@ -53,7 +55,7 @@ Cloudflare Worker backed by D1, deployed by GitHub Actions on push — see
 ```bash
 cd backend
 npm ci
-npm test                  # 125 tests
+npm test                  # 177 tests
 npm run typecheck
 npx wrangler dev          # optional, local only
 ```
@@ -76,9 +78,11 @@ Vapi's server URL, because the app talks to OpenAI directly.
 a browser client implementing the exact same WebRTC protocol as the Swift
 client, served straight off this Worker — the fastest way to confirm the
 actual mint → WebRTC → live-audio path works before sinking time into an
-Xcode project. See [`e2e/README.md`](e2e/README.md) for a scripted check of
-the parts that don't need a human in the room; the rest (hearing it talk,
-tapping Stop mid-sentence, sending a correction) still needs you.
+Xcode project. It now exercises two endpoints: `POST /intake/turn` (the typed
+follow-up-questions step, see ADR-005's intake amendment) and the unchanged
+`POST /realtime/session`. See [`e2e/README.md`](e2e/README.md) for a scripted
+check of the parts that don't need a human in the room; the rest (hearing it
+talk, tapping Stop mid-sentence, sending a correction) still needs you.
 
 ### Phone mode
 
@@ -116,10 +120,13 @@ resolve.
 
 **In-person mode (primary):** backend fully built and tested — config
 decoupling, brief schema, prompt builder, ephemeral-session minting against
-OpenAI's verified API shape, 503-not-crash when unconfigured. iOS: WebRTC
+OpenAI's verified API shape, 503-not-crash when unconfigured, plus a typed
+intake step (`POST /intake/turn`) that enriches a thin brief before the live
+session starts. Confirmed working end to end on a real device. iOS: WebRTC
 client and UI written but never compiled; the REST handshake follows OpenAI's
 documented flow, the WebRTC library calls are the most likely thing to need
-fixing on first real build.
+fixing on first real build; the intake step isn't built there yet (web-only
+so far, see `ios/README.md`).
 
 **Phone mode (paused):** the three original open technical questions are
 answered (ADR-001–003), the merge-window detection design is ADR-004, and as

@@ -17,12 +17,20 @@
  * users often cannot reliably interrupt by speaking, which is the entire
  * reason they're using it.
  *
+ * Now exercises TWO endpoints, in sequence: `POST /intake/turn` (a short
+ * typed back-and-forth that enriches the brief, see
+ * domain/inPersonIntake.ts) followed by the unchanged `POST /realtime/session`.
+ * The intake step always runs, but a prominent, never-disabled Skip control
+ * ends it at any point and goes live immediately — the same friction-cost
+ * reasoning as the Stop button below, applied to setup instead of mid-call.
+ * See ADR-005's intake amendment in docs/technical-decisions.md.
+ *
  * Deliberately kept as an internal engineering tool, not a second product
  * surface: no auth (matches `/realtime/session`, which already has none —
  * this doesn't add a new privilege, it just makes an already-public,
  * already-billable endpoint reachable from a browser instead of only curl),
- * no styling polish beyond making Stop unmissable, no persistence, no
- * parsing of incoming `oai-events` beyond a visible debug line. See the
+ * no styling polish beyond making Stop and Skip unmissable, no persistence,
+ * no parsing of incoming `oai-events` beyond a visible debug line. See the
  * ADR-005 amendment this file's commit adds for the fuller reasoning.
  */
 
@@ -57,6 +65,7 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   .screen { display: none; }
   body[data-state="idle"] .screen-brief,
   body[data-state="failed"] .screen-brief { display: block; }
+  body[data-state="intake"] .screen-intake { display: block; }
   body[data-state="connecting"] .screen-connecting { display: block; }
   body[data-state="live"] .screen-live { display: block; }
   body[data-state="ended"] .screen-ended { display: block; }
@@ -93,10 +102,41 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   .correction-row input { flex: 1; }
   .correction-row button { width: auto; margin-top: 0; padding: 10px 16px; }
 
+  /* The friction release valve for the intake step — same ethos as .btn-stop
+     above (large, high-contrast, ALWAYS tappable, never disabled — see the
+     script's skipButton handler) but a distinct colour so it's never
+     confused with Stop, which means something different (interrupt a live
+     session vs. skip setup entirely). See ADR-005's intake amendment. */
+  .btn-skip {
+    background: #0f766e; color: white; font-weight: 700; font-size: 1.05rem;
+    padding: 16px 18px;
+  }
+
+  .intake-log { margin: 16px 0; display: flex; flex-direction: column; gap: 8px; }
+  .intake-q, .intake-a {
+    padding: 10px 12px; border-radius: 8px; font-size: 0.9rem; white-space: pre-wrap;
+  }
+  .intake-q { background: #e5e7eb; color: #111; align-self: flex-start; }
+  .intake-a { background: #2563eb; color: white; align-self: flex-end; }
+  .intake-row { display: flex; gap: 8px; margin-top: 6px; }
+  .intake-row input { flex: 1; }
+  .intake-row button { width: auto; margin-top: 0; padding: 10px 16px; }
+
   .error-banner {
     background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 12px 14px;
     margin-top: 16px; font-size: 0.9rem; white-space: pre-wrap;
   }
+
+  /* Deliberately separate from .error-banner, which is display:none unless
+     body[data-state="failed"] — an intake error must stay visible while
+     data-state is still "intake" (a failed intake turn does NOT transition
+     to the failed state, since Skip must keep working). Reusing
+     .error-banner here would make the error silently invisible. */
+  .inline-error {
+    background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 10px 12px;
+    margin-top: 10px; font-size: 0.85rem; white-space: pre-wrap;
+  }
+  .inline-error[hidden] { display: none; }
   .status-line { font-size: 0.8rem; color: #888; margin-top: 10px; }
   .live-badge {
     display: inline-flex; align-items: center; gap: 8px; font-weight: 600;
@@ -130,9 +170,30 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     <textarea id="situationInput" maxlength="4000"
       placeholder='e.g. "I&#39;m at McDonald&#39;s, I want a McDouble no pickles and a water."'></textarea>
 
-    <button class="btn-primary" id="startButton" disabled>Start Talking</button>
+    <button class="btn-primary" id="startButton" disabled>Next — a couple of quick questions</button>
 
     <div class="error-banner" id="errorBanner"></div>
+  </div>
+
+  <div class="screen screen-intake">
+    <p class="subtitle">
+      A couple of quick questions so the AI has enough to work with. Type
+      your answer, or skip straight to live at any point &mdash; no penalty
+      either way.
+    </p>
+
+    <div id="intakeLog" class="intake-log"></div>
+
+    <label for="intakeInput">Your answer</label>
+    <div class="intake-row">
+      <input type="text" id="intakeInput" placeholder="Type your answer…">
+      <button class="btn-secondary" id="intakeSendButton">Send</button>
+    </div>
+
+    <button class="btn-skip" id="skipButton">Skip — start talking now</button>
+
+    <div class="status-line" id="intakeStatus"></div>
+    <div class="inline-error" id="intakeError" hidden></div>
   </div>
 
   <div class="screen screen-connecting">
@@ -177,8 +238,15 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   //   window.__lastSent        sentLog[sentLog.length - 1], for convenience
   //   window.__lastReceived    most recent parsed message received over the data channel
   //   window.__correctionMarker  { prefix, suffix } as returned by /realtime/session
+  //   window.__intakeTurns     the running intake transcript, the same array POSTed to /intake/turn
+  //   window.__situationSoFar  the exact string Skip would send right now
+  //   window.__lastIntakeReply the last parsed /intake/turn response body
+  //   window.__startedWith     the exact brief object POSTed to /realtime/session — lets a
+  //                            checker confirm the enriched paragraph reached it unchanged
   // ---------------------------------------------------------------------
   window.__sentLog = [];
+  window.__intakeTurns = [];
+  window.__situationSoFar = '';
 
   const body = document.body;
   const $ = (id) => document.getElementById(id);
@@ -187,6 +255,12 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   const nameInput = $('nameInput');
   const startButton = $('startButton');
   const errorBanner = $('errorBanner');
+  const intakeLog = $('intakeLog');
+  const intakeInput = $('intakeInput');
+  const intakeSendButton = $('intakeSendButton');
+  const skipButton = $('skipButton');
+  const intakeStatus = $('intakeStatus');
+  const intakeError = $('intakeError');
   const stopButton = $('stopButton');
   const correctionInput = $('correctionInput');
   const correctionButton = $('correctionButton');
@@ -211,13 +285,23 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   });
 
   startButton.addEventListener('click', () => {
-    start({
-      situation: situationInput.value.trim(),
-      userFirstName: nameInput.value.trim() || undefined,
-    }).catch((error) => {
-      console.error(error);
-      setState('failed', String(error && error.message ? error.message : error));
-    });
+    beginIntake();
+  });
+
+  intakeSendButton.addEventListener('click', sendIntakeAnswer);
+  intakeInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendIntakeAnswer();
+  });
+
+  // The friction release valve. Never disabled, not even mid-request — see
+  // the .btn-skip CSS comment. Purely client-side and synchronous: no
+  // network call, so Skip works even if /intake/turn or OpenAI itself is
+  // down. intakeAbandoned makes any in-flight /intake/turn response a no-op
+  // once Skip has already moved on, so a late reply can't yank the user back
+  // into the intake screen after they've chosen to leave it.
+  skipButton.addEventListener('click', () => {
+    intakeAbandoned = true;
+    goLive(window.__situationSoFar || situationInput.value.trim());
   });
 
   stopButton.addEventListener('click', () => {
@@ -241,14 +325,127 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     situationInput.value = '';
     nameInput.value = '';
     correctionInput.value = '';
+    intakeInput.value = '';
+    intakeLog.innerHTML = '';
+    intakeError.hidden = true;
+    intakeStatus.textContent = '';
+    intakeTurns = [];
+    window.__intakeTurns = intakeTurns;
+    window.__situationSoFar = '';
+    intakeAbandoned = false;
     startButton.disabled = true;
     setState('idle');
   });
 
   let pc = null;
   let dc = null;
+  let intakeTurns = [];
+  // Set true the instant Skip is clicked, so a late-arriving /intake/turn
+  // response (the user skipped while a request was in flight) is a no-op
+  // rather than something that could still move the UI.
+  let intakeAbandoned = false;
+
+  function beginIntake() {
+    const situation = situationInput.value.trim();
+    intakeTurns = [];
+    window.__intakeTurns = intakeTurns;
+    window.__situationSoFar = situation;
+    intakeAbandoned = false;
+    intakeLog.innerHTML = '';
+    intakeError.hidden = true;
+    setState('intake');
+
+    // Shown for context, not stored in intakeTurns — the original situation
+    // already travels separately as the request's situation field (see
+    // IntakeRequestSchema), so adding it here too would double it up there.
+    appendIntakeBubble('intake-a', situation);
+
+    postIntakeTurn(situation);
+  }
+
+  // Appends one bubble; deliberately never clears/rebuilds the whole log
+  // (a full re-render from intakeTurns would erase the seed bubble in
+  // beginIntake, which isn't stored in intakeTurns — see its comment).
+  function appendIntakeBubble(className, text) {
+    const div = document.createElement('div');
+    div.className = className;
+    div.textContent = text;
+    intakeLog.appendChild(div);
+  }
+
+  function sendIntakeAnswer() {
+    const text = intakeInput.value.trim();
+    if (!text) return;
+    intakeTurns.push({ role: 'user', text });
+    window.__intakeTurns = intakeTurns;
+    appendIntakeBubble('intake-a', text);
+    intakeInput.value = '';
+    postIntakeTurn(situationInput.value.trim());
+  }
+
+  async function postIntakeTurn(situation) {
+    intakeSendButton.disabled = true;
+    intakeStatus.textContent = 'Thinking…';
+    intakeError.hidden = true;
+
+    let reply;
+    try {
+      const res = await fetch('/intake/turn', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          situation,
+          userFirstName: nameInput.value.trim() || undefined,
+          turns: intakeTurns,
+        }),
+      });
+      const parsedBody = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(\`/intake/turn \${res.status}: \${parsedBody.error || 'unknown error'}\${parsedBody.detail ? \` — \${parsedBody.detail}\` : ''}\`);
+      }
+      reply = parsedBody;
+    } catch (error) {
+      if (intakeAbandoned) return; // Skip already moved on — don't fight it.
+      log(\`intake turn failed: \${error}\`);
+      // Deliberately does NOT setState('failed') — a failing intake must
+      // never block going live. Stay on the intake screen; Skip keeps
+      // working (it's synchronous and needs nothing from this request).
+      intakeError.hidden = false;
+      intakeError.textContent = String(error && error.message ? error.message : error);
+      intakeSendButton.disabled = false;
+      intakeStatus.textContent = '';
+      return;
+    }
+
+    if (intakeAbandoned) return;
+
+    window.__lastIntakeReply = reply;
+    window.__situationSoFar = reply.situationSoFar || window.__situationSoFar;
+    intakeSendButton.disabled = false;
+    intakeStatus.textContent = '';
+
+    if (reply.done) {
+      goLive(reply.situation);
+      return;
+    }
+
+    intakeTurns.push({ role: 'assistant', text: reply.question });
+    window.__intakeTurns = intakeTurns;
+    appendIntakeBubble('intake-q', reply.question);
+  }
+
+  function goLive(situation) {
+    start({
+      situation,
+      userFirstName: nameInput.value.trim() || undefined,
+    }).catch((error) => {
+      console.error(error);
+      setState('failed', String(error && error.message ? error.message : error));
+    });
+  }
 
   async function start(brief) {
+    window.__startedWith = brief;
     setState('connecting');
     log('POSTing brief to /realtime/session…');
 

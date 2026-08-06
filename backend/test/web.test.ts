@@ -38,6 +38,8 @@ describe('GET /web', () => {
     // Same mint endpoint, called relatively so this works unchanged under
     // wrangler dev or the live deployment.
     expect(body).toContain('/realtime/session');
+    // The typed intake step that now precedes it — see ADR-005's intake amendment.
+    expect(body).toContain('/intake/turn');
   });
 
   // The regression guard for the exact problem the correctionMarker field
@@ -74,5 +76,36 @@ describe('GET /web', () => {
     expect(body).toContain('window.__lastSent');
     expect(body).toContain('window.__correctionMarker');
     expect(body).toContain('data-state="idle"');
+    // Intake step's hooks — see the doc comment block at the top of the
+    // inline script in src/routes/web.ts.
+    expect(body).toContain('window.__intakeTurns');
+    expect(body).toContain('window.__situationSoFar');
+    expect(body).toContain('window.__startedWith');
+  });
+
+  // The intake step always runs, but must never become the landing state —
+  // it only starts once the user has typed something and hit the button.
+  it('still starts in the idle state, not the intake state', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('<body data-state="idle">');
+  });
+
+  // Guards the product decision at the cheapest possible layer: Skip is
+  // always available, never gated behind a disabled attribute. See ADR-005's
+  // intake amendment and the .btn-skip CSS comment in src/routes/web.ts.
+  it('has an always-enabled Skip control for the intake step', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('id="skipButton"');
+    expect(body).not.toMatch(/id="skipButton"[^>]*disabled/);
+  });
+
+  // A failing intake turn must stay visible without depending on
+  // body[data-state="failed"] — see the .inline-error CSS comment, which
+  // exists specifically because .error-banner is invisible outside that
+  // state and would have silently hidden this exact error.
+  it('shows intake errors independently of the failed state', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('id="intakeError"');
+    expect(body).toContain('.inline-error');
   });
 });

@@ -56,6 +56,23 @@ Other env vars:
 - `VERBOSE=1` — echo the page's own `console.log` output as it runs, useful
   for debugging a stuck checkpoint.
 
+## The page now opens a typed intake step first
+
+Before minting a session, `/web` runs a short typed back-and-forth
+(`POST /intake/turn`, see `backend/src/domain/inPersonIntake.ts` and ADR-005's
+intake amendment in `docs/technical-decisions.md`). This script deliberately
+does not drive that conversation — it clicks `#skipButton` the moment the
+page reaches `data-state="intake"`, and goes straight on to checkpoint A from
+there. That's on purpose: this script proves the WebRTC/live-session
+contract, not the intake LLM (that's covered by `backend/test/intake.test.ts`'s
+faked-fetch suite), and driving through Skip keeps each run at exactly one
+billable OpenAI operation instead of also spending intake completions.
+
+A useful side effect: `#skipButton` going missing or renamed by a future
+`web.ts` change surfaces here as a checkpoint-A timeout, not a mysterious
+hang. If A starts failing right after touching the intake screen, check that
+first before assuming the realtime contract itself broke.
+
 ## What the checkpoints mean
 
 Results print per-checkpoint (`PASS`/`FAIL`/`SKIP`), not as one aggregate

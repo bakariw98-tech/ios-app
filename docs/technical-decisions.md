@@ -586,6 +586,120 @@ clean pass here isolates "does OpenAI Realtime + WebRTC work at all" from
 "does `stasel/WebRTC`'s specific Swift API integrate correctly" — only the
 latter is still open afterward.
 
+### Amendment — a typed intake step before the live session
+
+**Trigger:** live beta feedback, the product owner's own report — the
+delegate works exceptionally well once it has enough context, but a single
+one-shot free-text box often under-specifies. People don't always think to
+type unprompted the specifics (order details, names, amounts, what "done"
+looks like) that make the delegate sound convincing and specific rather than
+generic.
+
+**Decision:** before the live session starts, a short typed, LLM-mediated
+intake (`POST /intake/turn`, `backend/src/domain/inPersonIntake.ts`,
+`backend/src/routes/intake.ts`, `backend/src/lib/openaiChat.ts`) asks a small
+number of short follow-up questions and, when satisfied, produces one
+enriched paragraph. That paragraph is sent to the **existing, unchanged**
+`/realtime/session` as `situation` — `inPersonBrief.ts`, `realtime.ts`, and
+`openaiRealtime.ts` needed no changes at all. That pipeline was just proven
+live minutes earlier in this same session; re-touching it for this feature
+would have bought nothing.
+
+**Explicitly rejected, with reasons:**
+
+- **Structured fields into `BriefSchema`.** Would re-touch the just-verified
+  pipeline for no real gain — the delegate only ever consumes prose — and a
+  multi-field form is exactly the high-effort shape this population is
+  fatigued by (see `inPersonBrief.ts`'s "who this is for"). One enriched
+  paragraph was the deliberate, explicit product choice here, not a shortcut.
+- **A spoken intake.** Structurally wrong for this app. Unreliable live
+  speech production is the entire reason this mode exists — a spoken intake
+  step would reintroduce the exact wrong assumption this ADR's first
+  amendment already corrected once. The intake is typed, full stop; its
+  system prompt tells the model outright that the user is typing, never
+  speaking.
+- **Reusing phone mode's interview/intent machinery.** Mechanically
+  impossible, not merely undesirable: `intent.ts`'s `IntentSchema` is
+  populated by Vapi's `variableExtractionPlan` running structured extraction
+  against a live call transcript inside a Vapi `handoff` — a Vapi-platform
+  feature with no equivalent in this mode's direct-OpenAI-Realtime-over-WebRTC
+  path. No Vapi exists in this path, no transcript to extract from. What's
+  borrowed is the **topic list only** — desired outcome, concrete specifics,
+  what to say close to verbatim, what to avoid — as prose in
+  `buildIntakeInstructions`'s system prompt. No shared code, no shared
+  schema; `inPersonIntake.ts`'s doc comment says so explicitly, so this isn't
+  later "unified" into something it structurally can't be.
+- **Server-side session state (D1/KV/Durable Objects).** In-person mode has
+  zero server-side session state today and that property is worth keeping.
+  `/intake/turn` is stateless — the client holds the running transcript and
+  posts it whole every turn.
+- **Making the intake opt-in.** Considered, rejected: it always runs the
+  moment "Next" is clicked. The escape hatch is Skip, not a checkbox nobody
+  would find.
+- **A live e2e script exercising the intake conversation.** The intake path
+  is already covered by `backend/test/intake.test.ts`'s faked-fetch suite;
+  a live script would cost real completions every run for little the unit
+  tests don't already prove. `e2e/run.mjs` deliberately drives through Skip
+  instead — see its updated comments and `e2e/README.md`.
+
+**Why Skip is first-class, not an afterthought:** same reasoning the Stop
+button already got in this ADR's first amendment — added friction is a real
+cost for this population, and a stuck or unwanted intake conversation is a
+worse failure than a thinner brief. So Skip is large, high-contrast, and
+**never disabled, not even mid-request** — it needs no network call at all
+(the client rolls the transcript up itself, mirroring
+`composeTranscriptSituation`'s server-side logic), so it keeps working even
+if `/intake/turn` or OpenAI itself is down.
+
+**New model dependency:** `gpt-5.6-luna` (`lib/openaiChat.ts`), a
+cost-optimized non-realtime chat model, chosen because `/intake/turn` is an
+unauthenticated, potentially-looped endpoint (see the cost note below) where
+the cheapest tier that supports Structured Outputs is the right default. Same
+staleness warning as `REALTIME_MODEL` already carries — verify against
+https://developers.openai.com/api/docs/models before assuming a failure here
+is more than this constant going stale, which is exactly what happened to
+`REALTIME_MODEL` once already.
+
+**A real implementation detail worth recording:** OpenAI's `strict: true`
+Structured Outputs mode requires every property in a schema's `properties`
+to also appear in `required`, with `additionalProperties: false` — there is
+no way to express an "optional" field except making it nullable.
+`IntakeReplySchema` uses `.nullable()` throughout for exactly this reason,
+and `INTAKE_REPLY_JSON_SCHEMA` is hand-written rather than derived via
+`z.toJSONSchema` (unlike `intent.ts`'s `intentJsonSchema`, which targets
+Vapi's more lenient extraction) with a drift-guard test keeping the two in
+sync. `choices[0].message.refusal` can also arrive *instead of* `content` in
+strict mode — handled explicitly in `openaiChat.ts`, since otherwise it
+surfaces as a baffling `JSON.parse(undefined)` two layers from the cause.
+
+**Cost and abuse surface, named rather than solved:** `/intake/turn` is
+unauthenticated like `/realtime/session` and `/web` already are, but unlike
+those it's the first endpoint here where a hostile client can loop paid
+completions cheaply — one request per keystroke of persistence, not one per
+session. Mitigated today only by the hard turn/length caps
+(`MAX_INTAKE_QUESTIONS`, `MAX_INTAKE_TURNS`), the cheap model tier, and a
+`max_completion_tokens` bound. A real fix (per-IP rate limiting, or a shared
+secret in front of both in-person endpoints) is a genuine follow-up, not
+built in this pass.
+
+**Safety screening — still not addressed, now with a hook point.** This
+ADR's earlier amendment already flagged that in-person mode has no
+safety-category screening (domestic violence, minors, etc. — the kind phone
+mode's `domain/safety.ts` does). The intake step was considered as a natural
+home for it, since it's now the first place in this mode where a model reads
+the user's situation before anything is spoken aloud. Deliberately **not**
+built here — restated so it isn't silently assumed handled. What changed:
+there is now a hook point, where before there was none.
+
+**Open product question, deliberately deferred:** the enriched paragraph
+replaces the user's own words with no confirmation step before going live —
+no "here's what I'll say, go or edit" screen. The paragraph is visible in
+`#debugLog` and via `window.__startedWith` for anyone checking, but nothing
+in the UI surfaces it proactively. Not added here: this is an internal test
+client, and a confirmation screen is a fifth screen of friction for a
+population this ADR has repeatedly weighed that cost against. Worth
+revisiting once this leaves internal-tool status.
+
 [rtwebrtc]: https://developers.openai.com/api/docs/guides/realtime-webrtc
 
 ---

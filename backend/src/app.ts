@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 
 import { type Config, type Env, buildConfig } from './lib/config.js';
 import { D1Store, type Store } from './lib/store.js';
+import { registerIntakeRoutes } from './routes/intake.js';
 import { registerRealtimeRoutes } from './routes/realtime.js';
 import { registerSessionRoutes } from './routes/session.js';
 import { registerWebRoutes } from './routes/web.js';
@@ -49,6 +50,7 @@ export function buildApp(options: AppOptions = {}) {
   registerWebhookRoutes(app);
   registerSessionRoutes(app);
   registerRealtimeRoutes(app);
+  registerIntakeRoutes(app);
   registerWebRoutes(app);
 
   // Reports which mode(s) are actually usable, not just that the process is

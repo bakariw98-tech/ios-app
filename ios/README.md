@@ -13,6 +13,11 @@ DelegateApp.swift                    App entry. TabView: BriefView (primary), Ca
 Models/RealtimeSession.swift         Wire types for /realtime/session.
 Services/RealtimeSessionClient.swift WebRTC connection to OpenAI. Needs the WebRTC package — see below.
 Views/BriefView.swift                Type a brief, AI starts talking immediately.
+                                      (The web client now has a typed intake step before
+                                      this — POST /intake/turn, see ADR-005's intake
+                                      amendment — not built here yet. BriefView still posts
+                                      a one-shot brief straight to /realtime/session, which
+                                      remains a valid client.)
 
 --- Phone-call mode (paused) ---
 Models/CallSession.swift             Wire types mirroring the backend's Vapi-call shape.

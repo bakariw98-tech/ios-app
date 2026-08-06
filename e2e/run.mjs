@@ -112,11 +112,23 @@ async function main() {
       throw new Error(`Expected initial state "idle", got "${initialState}"`);
     }
 
-    await page.fill(
-      '#situationInput',
-      "Say the exact words 'automated test successful' and then stop talking.",
-    );
+    const testSituation =
+      "Say the exact words 'automated test successful' and then stop talking.";
+    await page.fill('#situationInput', testSituation);
     await page.click('#startButton');
+
+    // The page now opens a typed intake step before minting a session — see
+    // domain/inPersonIntake.ts and ADR-005's intake amendment. This script
+    // proves the WebRTC/live-session contract (checkpoints A-F), not the
+    // intake LLM itself (that's covered by test/intake.test.ts's faked-fetch
+    // suite). Driving through Skip keeps a run at exactly one billable
+    // OpenAI operation instead of also spending intake completions every
+    // time, and exercises the release valve that matters most operationally:
+    // if #skipButton is ever missing or renamed, this shows up here as a
+    // checkpoint-A timeout — check that first if A starts failing after a
+    // web.ts change.
+    await page.waitForSelector('body[data-state="intake"]', { timeout: 10000 });
+    await page.click('#skipButton');
 
     // --- Checkpoint A: mint session ---
     let sessionBody;
@@ -151,6 +163,20 @@ async function main() {
       }
     } catch (error) {
       record('A', 'POST /realtime/session mints a session', 'FAIL', String(error));
+    }
+
+    // Not a checkpoint (doesn't affect the summary or exit code) — a plain
+    // note confirming Skip passed the originally-typed text through to
+    // /realtime/session unchanged, rather than something mangled or dropped
+    // along the way.
+    if (sessionBody) {
+      const startedWith = await page.evaluate(() => window.__startedWith).catch(() => null);
+      if (startedWith?.situation !== testSituation) {
+        console.log(
+          `  note: Skip's brief.situation was "${startedWith?.situation}", ` +
+            `expected the original typed text unchanged`,
+        );
+      }
     }
 
     if (!sessionBody) {
