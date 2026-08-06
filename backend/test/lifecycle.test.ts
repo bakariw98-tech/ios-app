@@ -280,6 +280,17 @@ describe('hard blocks', () => {
   });
 });
 
+describe('GET /vapi/webhook', () => {
+  it('answers 200 with no auth, for dashboard URL-validation pings', async () => {
+    // Vapi's dashboard can refuse to save a Server URL until some validation
+    // ping succeeds, and the method it uses for that ping isn't documented.
+    // If it's a GET, this route must not 404 — the POST handler is unaffected
+    // and still requires the secret for every real event.
+    const response = await app.request('/vapi/webhook', {}, NO_ENV);
+    expect(response.status).toBe(200);
+  });
+});
+
 describe('webhook auth', () => {
   it('rejects a wrong secret', async () => {
     const response = await post({ type: 'status-update' }, 'wrong-secret');

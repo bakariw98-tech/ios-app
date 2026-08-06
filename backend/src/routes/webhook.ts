@@ -81,6 +81,14 @@ function extractSecret(c: Ctx): string | null {
 }
 
 export function registerWebhookRoutes(app: Hono<AppBindings>): void {
+  // Vapi's dashboard can refuse to save a Server URL until it gets back a 200
+  // from a validation ping when you type it in, and that ping's method isn't
+  // documented — it may be a GET, which this route otherwise 404s on since
+  // real events only ever arrive as POST. A GET here does nothing but confirm
+  // "something is listening"; it never touches auth or call state, so it
+  // can't be used to probe or trigger anything.
+  app.get('/vapi/webhook', (c) => c.text('ok'));
+
   app.post('/vapi/webhook', async (c) => {
     const config = c.get('config');
     const provided = extractSecret(c);
