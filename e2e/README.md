@@ -65,27 +65,65 @@ network" is a materially different, useful result from "the app is broken."
 | # | Checks | Needs only HTTPS? |
 |---|---|---|
 | A | `POST /realtime/session` → 200, real `clientSecret`, `correctionMarker` matches the source-of-truth strings in `backend/src/domain/inPersonBrief.ts` | Yes |
-| B | `POST https://api.openai.com/v1/realtime/calls` → 200, SDP-shaped answer, `pc.signalingState === 'stable'` | Yes |
+| B | `POST https://api.openai.com/v1/realtime/calls` → 2xx (OpenAI answers `201`, not `200` — the check matches what the shipped clients actually do: `response.ok`), SDP-shaped answer, `pc.signalingState === 'stable'` | Yes, **from the browser itself** — see below |
 | C | `pc.iceConnectionState` reaches `connected`/`completed` | **No — needs outbound UDP** |
 | D | data channel `"oai-events"` reaches `readyState === 'open'` | No — depends on C |
 | E | tapping Stop sends exactly `{"type":"response.cancel"}` on the data channel | No — depends on C/D |
 | F | submitting a correction sends `conversation.item.create` (text wrapped in the marker from `session.correctionMarker`) then `response.create`, in that order | No — depends on C/D |
 
-The script only exits non-zero if **A or B** fail — those indicate an actual
-code or contract problem regardless of network restrictions. C–F failing is
-reported loudly (with an explanation, not a bare timeout) but does not fail
-the process, because that failure mode is expected from a UDP-restricted
-sandbox and says nothing about whether the app itself is broken.
+Before checkpoint A, the script probes whether the launched browser can
+complete a TLS handshake to an external host at all (`https://api.openai.com/`).
+If it can't, that's printed up front, and a checkpoint-B failure is reported
+as *that*, not as a broken contract — see below for why this probe exists.
+
+The script only exits non-zero if **A** fails, or **B** fails while that
+probe says the browser *can* reach external HTTPS — those indicate an actual
+code or contract problem regardless of network restrictions. Everything else
+(C–F, or B when the probe already failed) is reported loudly but does not
+fail the process, because that failure mode is an environment limitation,
+not a claim that the app is broken.
+
+## Why B, and not just C–F, may legitimately fail here
+
+WebRTC's real media and the `oai-events` data channel ride on UDP
+(ICE/DTLS-SRTP), which is why C–F can fail on a UDP-restricted network — see
+below. But this script also found something less expected: in the sandbox it
+was built in, **headless Chromium's own TLS handshakes to any external HTTPS
+host were reset**, even though the exact same host was reachable fine from
+curl and from raw Node `net`/`tls` sockets run in that same shell. Confirmed
+with Chromium's own `--log-net-log`: `SSL_HANDSHAKE_ERROR`, `net_error: -101`
+(`ERR_CONNECTION_RESET`), `os_error: 104` (`ECONNRESET`) — happening at the
+TLS layer itself, after the CONNECT tunnel to the proxy was already
+established successfully. Plain HTTP through the same proxy worked fine from
+Chromium; only HTTPS to an external host failed. That strongly suggests a
+TLS-fingerprint-based egress policy in that sandbox that allows script-like
+clients (curl, Node) through but resets a real browser engine's handshake —
+not anything wrong with this app, and not the same mechanism as the UDP
+restriction below, which is why checkpoint B needed its own detection rather
+than being lumped in with C–F.
+
+**This does not mean checkpoint B is unverifiable in general** — only that a
+sandbox with this specific restriction can't verify it via a real headless
+browser. In that situation, the underlying HTTP contract can still be proven
+by hand: capture the real SDP offer the page generates
+(`window.__pc.localDescription.sdp`, readable via `page.evaluate` any time
+after the page attempts and fails its own POST) together with the
+`clientSecret` from checkpoint A's response, then replay that exact offer
+against `https://api.openai.com/v1/realtime/calls` with `curl` from the same
+shell. Doing exactly this against the real live Worker got back `201` and a
+genuine SDP answer — proving the contract works even though this script
+can't demonstrate it end-to-end from that environment.
 
 ## Why C–F may legitimately fail here
 
-WebRTC's real media and the `oai-events` data channel both ride on UDP
-(ICE/DTLS-SRTP), not HTTPS. This script has been run from a sandbox where
-HTTPS egress to `api.openai.com` works (confirmed live) but raw UDP does
-not — a STUN binding request and an NTP query both timed out with no reply,
-while the equivalent HTTPS call succeeded instantly. In that environment,
-expect A and B to pass and C–F to fail with a "stuck at ..." message that
-says outright this is likely a network restriction, not an app bug.
+This script has been run from a sandbox where HTTPS egress to
+`api.openai.com` works (confirmed live, including from the browser once B's
+issue above is accounted for) but raw UDP does not — a STUN binding request
+and an NTP query both timed out with no reply, while the equivalent HTTPS
+call succeeded instantly. In that environment, expect A and B to pass (once
+the TLS restriction above isn't present) and C–F to fail with a "stuck at
+..." message that says outright this is likely a network restriction, not an
+app bug.
 
 **If C–F fail, that is not proof the app works — it's an inconclusive
 result.** The only real proof is a human opening `/web` on their own

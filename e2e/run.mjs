@@ -75,6 +75,35 @@ async function main() {
     if (process.env.VERBOSE) console.log(`  [page] ${msg.text()}`);
   });
 
+  // Some sandboxes let curl/Node reach external HTTPS hosts fine while
+  // resetting Chromium's own TLS handshakes to them (observed directly while
+  // building this script: raw sockets and curl succeeded, Chromium's
+  // page.goto to the same host got net::ERR_CONNECTION_RESET, confirmed via
+  // Chromium's own --log-net-log as an SSL_HANDSHAKE_ERROR, -101). That is a
+  // real, separate limitation from the WebRTC/UDP one checkpoints C-F already
+  // account for, and it specifically breaks checkpoint B (the browser POSTs
+  // the SDP offer straight to api.openai.com). Detect it upfront so a B
+  // failure here is correctly attributed to the environment instead of
+  // misreported as a broken contract.
+  let browserCanReachExternalHttps = true;
+  try {
+    const probe = await context.newPage();
+    await probe.goto('https://api.openai.com/', { timeout: 8000 }).catch(() => {
+      throw new Error('unreachable');
+    });
+    await probe.close();
+  } catch {
+    browserCanReachExternalHttps = false;
+  }
+  if (!browserCanReachExternalHttps) {
+    console.log(
+      "note: this browser can't complete a TLS handshake to an external " +
+        'host from this environment (checked against api.openai.com before ' +
+        'starting). Checkpoint B needs that to work — expect it to fail for ' +
+        "that reason, not a code bug. See README.md.\n",
+    );
+  }
+
   try {
     await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
@@ -130,7 +159,7 @@ async function main() {
       record('D', 'Data channel opens', 'SKIP', 'checkpoint A did not succeed');
       record('E', 'Stop sends response.cancel', 'SKIP', 'checkpoint A did not succeed');
       record('F', 'Correction sends the marked item + response.create', 'SKIP', 'checkpoint A did not succeed');
-      printSummaryAndExit();
+      printSummaryAndExit(browserCanReachExternalHttps);
       return;
     }
 
@@ -141,7 +170,10 @@ async function main() {
         { timeout: 10000 },
       );
       const sdpText = await sdpResponse.text();
-      const ok = sdpResponse.status() === 200 && sdpText.startsWith('v=0');
+      // OpenAI answers this endpoint with 201, not 200 — confirmed against
+      // the real endpoint. response.ok (any 2xx) is what the shipped clients
+      // actually check; matching that here instead of a specific code.
+      const ok = sdpResponse.ok() && sdpText.startsWith('v=0');
       record(
         'B',
         'SDP offer/answer exchange with OpenAI',
@@ -149,7 +181,17 @@ async function main() {
         ok ? undefined : `HTTP ${sdpResponse.status()}`,
       );
     } catch (error) {
-      record('B', 'SDP offer/answer exchange with OpenAI', 'FAIL', String(error));
+      record(
+        'B',
+        'SDP offer/answer exchange with OpenAI',
+        'FAIL',
+        browserCanReachExternalHttps
+          ? String(error)
+          : `${error} — this browser can't reach external HTTPS hosts from ` +
+              'this environment (see the note printed at startup); this is ' +
+              'very likely that, not a broken contract. Re-run from a ' +
+              'normal network to confirm.',
+      );
     }
 
     const signalingState = await page
@@ -198,7 +240,7 @@ async function main() {
     if (dcState !== 'open') {
       record('E', 'Stop sends response.cancel', 'SKIP', 'data channel not open');
       record('F', 'Correction sends the marked item + response.create', 'SKIP', 'data channel not open');
-      printSummaryAndExit();
+      printSummaryAndExit(browserCanReachExternalHttps);
       return;
     }
 
@@ -244,13 +286,13 @@ async function main() {
       console.log(`  note: expected final state "ended", got "${finalState}"`);
     }
 
-    printSummaryAndExit();
+    printSummaryAndExit(browserCanReachExternalHttps);
   } finally {
     await browser.close();
   }
 }
 
-function printSummaryAndExit() {
+function printSummaryAndExit(browserCanReachExternalHttps) {
   console.log('\n--- Summary ---');
   const pass = results.filter((r) => r.status === 'PASS').length;
   const fail = results.filter((r) => r.status === 'FAIL').length;
@@ -259,18 +301,29 @@ function printSummaryAndExit() {
 
   if (fail > 0 || skip > 0) {
     console.log(
-      '\nA-B failing or skipping means the backend contract itself is broken — ' +
-        'that IS a real bug. C-F failing while A-B pass most likely means the ' +
-        'running environment lacks outbound UDP for WebRTC media, not that the ' +
-        'app is broken — re-run from a normal network to confirm. See README.md.',
+      '\nA failing or skipping means the backend contract itself is broken — ' +
+        "that IS a real bug. B failing is too, UNLESS this browser can't reach " +
+        'external HTTPS hosts at all from this environment (checked at ' +
+        'startup, see the note above if so) — in that case B is expected to ' +
+        'fail for the same reason C-F usually do. C-F failing while A-B pass ' +
+        'most likely means the running environment lacks outbound UDP for ' +
+        'WebRTC media, not that the app is broken — re-run from a normal ' +
+        'network to confirm either case. See README.md.',
     );
   }
 
-  // Exit non-zero only if A or B failed — those are the checkpoints that
-  // indicate an actual code/contract problem regardless of network
-  // restrictions. C-F failing is reported loudly above but doesn't fail the
-  // process, since that failure mode is expected from this specific sandbox.
-  const coreBroken = results.some((r) => (r.id === 'A' || r.id === 'B') && r.status === 'FAIL');
+  // Exit non-zero only for failures that indicate an actual code/contract
+  // problem: A always counts; B counts unless this browser already couldn't
+  // reach external HTTPS hosts at all before the test even started, in which
+  // case B's failure is that environment limitation, not the app. C-F failing
+  // is reported loudly above but never fails the process, since UDP-restricted
+  // sandboxes are a known, expected case.
+  const coreBroken = results.some((r) => {
+    if (r.status !== 'FAIL') return false;
+    if (r.id === 'A') return true;
+    if (r.id === 'B') return browserCanReachExternalHttps;
+    return false;
+  });
   process.exitCode = coreBroken ? 1 : 0;
 }
 

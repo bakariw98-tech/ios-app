@@ -76,6 +76,12 @@ app will not compile without it — `RealtimeSessionClient.swift` imports
   — so getting this right on a real device, with real interruption timing,
   matters more here than almost anywhere else in the app. Start here when
   real-device testing becomes possible.
+- **`postOffer`'s status check is wrong.** `RealtimeSessionClient.swift` requires
+  `http.statusCode == 200` on the SDP exchange response. A real request against
+  `/v1/realtime/calls` (made while verifying the browser client, see
+  `e2e/README.md`) came back `201 Created`, not `200` — this check would reject
+  a successful call. The browser client got this right by checking `response.ok`
+  (any 2xx); fix this the same way before this file is next touched.
 - **Text-only brief input.** The brief pivot said "types (or speaks)" — only
   typing is built. Voice input for the brief itself (before the live session
   starts) would need `SFSpeechRecognizer` or similar; not started.

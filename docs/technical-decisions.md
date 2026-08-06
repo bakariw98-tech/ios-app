@@ -550,6 +550,27 @@ This is the same fundamental limit phone mode already had (a human on a real
 call was always the actual test); this just makes explicit which parts a
 script can and can't stand in for.
 
+Running it for real against the live Worker also found a second, narrower
+sandbox limitation beyond the UDP one: headless Chromium's own TLS
+handshakes to external hosts got reset in that environment, even though the
+identical host was reachable fine from curl and raw Node sockets in the same
+shell — a TLS-fingerprint-based egress restriction, not anything about this
+app. Rather than let that misreport a real checkpoint as a broken contract,
+`e2e/run.mjs` now probes for it up front and attributes a resulting
+checkpoint-B failure correctly. See `e2e/README.md` for the full mechanism
+and how the underlying HTTP contract was proven anyway (by hand, replaying
+the browser's own captured SDP offer through `curl`) despite the browser
+itself being unable to demonstrate it end-to-end from that specific sandbox.
+
+This same live run also caught two real bugs no amount of local testing had:
+`gpt-realtime-2025-08-28` had been retired by OpenAI (current ID is
+`gpt-realtime-2.1`), and `session.audio.output.format` needed the same
+`rate: 24000` `session.audio.input.format` already had — both 400/502'd on
+the very first live request. Both are fixed in `lib/openaiRealtime.ts`, with
+tests added so neither regresses unnoticed. Confirms the point this whole
+effort was built on: the value wasn't the client passing tests, it was
+finding out where reality disagreed with the docs before an iOS build did.
+
 **Recommendation:** keep `/web` as an internal engineering tool (it's cheap
 — one route, one HTML string, one test file), not a second marketed product
 surface. Its job is narrowing what's still unproven before the iOS build: a
