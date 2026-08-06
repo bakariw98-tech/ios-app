@@ -404,6 +404,83 @@ an in-person-only deploy shouldn't need Vapi configured at all. `vapi` and
 only the block it needs and answers `503` (not a 500 crash) if its mode
 isn't configured. See `backend/src/lib/config.ts`.
 
+### Amendment — who this is for, and a wrong assumption it corrected
+
+Added after the initial pivot, from user-provided context that sharpened the
+target population and caught a real design flaw before it shipped further.
+
+**Who this is for:** people who can hear and understand fine, and can move
+and type fine, but can't reliably produce speech live, in the moment — severe
+stutter, apraxia, ALS/motor neuron disease, post-stroke aphasia, non-verbal
+autism, selective mutism. Not typing-impaired — typing is often their
+*strongest* channel. It's live spoken conversation specifically that's
+unreliable.
+
+**Why this isn't "a faster AAC app."** Type-a-sentence-and-speak-it AAC apps
+already exist (Proloquo2Go, Speech Assistant AAC, etc.) and are old,
+insufficient tech for exactly the reason this mode exists: real conversation
+is dynamic. A follow-up question means stopping, typing a whole new sentence,
+and making everyone wait — exhausting, and why people avoid live conversation
+when they can. This mode's actual differentiator is carrying the live
+back-and-forth itself: the model responds to whatever the other person says
+in real time, the way a human companion speaking on someone's behalf would.
+The user only steps back in for a decision only they can make.
+
+**The wrong assumption this corrected:** the initial build of this mode's
+prompt (`domain/inPersonBrief.ts`) and iOS client
+(`RealtimeSessionClient.swift`) said the user could interrupt or correct the
+AI by just speaking up — "they can jump in themselves at any point... follow
+them." That's backwards for exactly the population this mode is for.
+Unreliable live speech production is the entire reason they're using it;
+"just talk over it" is not an available fallback for a large share of the
+intended users.
+
+**The fix, in both places:**
+
+- The prompt no longer expects or waits for spoken interruption. It's told
+  explicitly not to treat silence as agreement or disagreement, and that the
+  user reaches it a different way.
+- The iOS client gained a real non-verbal interrupt path:
+  `stopSpeaking()` sends `response.cancel` over the already-open `oai-events`
+  data channel — one tap, no typing, stops the AI immediately. `BriefView`
+  makes this the single largest, most prominent control on screen during a
+  live session, not a secondary option.
+- For a specific correction (not just "stop"), `sendCorrection(_:from:)`
+  injects a typed message via `conversation.item.create` + `response.create`.
+  It can't be sent as a plain `user`-role message, because OpenAI Realtime has
+  no separate channel distinguishing "the person this AI represents" from
+  "whoever is talking into the shared mic" — both arrive as the same `user`
+  role (the same fundamental single-audio-stream constraint documented for
+  phone mode in ADR-001/ADR-004, recurring here in a new shape). So the
+  correction is wrapped in an explicit marker —
+  `[TYPED CORRECTION FROM <name> — NOT SPOKEN BY THE OTHER PERSON]: <text>` —
+  and the prompt is taught that exact format, told to treat it with full
+  authority, and told never to read the marker itself out loud. The wording
+  is kept in sync between `inPersonBrief.ts`'s `CORRECTION_MARKER_PREFIX` /
+  `CORRECTION_MARKER_SUFFIX` constants and the Swift-side implementation by
+  convention (documented in both places), not shared code — one side is
+  TypeScript, the other Swift.
+- The prompt also now says explicitly that being cut off mid-sentence is
+  normal and expected, not an error, so the model doesn't get confused or
+  start apologising when `response.cancel` lands.
+
+**Also tightened:** the "sound natural, not robotic" requirement wasn't
+previously spelled out. The prompt now explicitly tells the model to sound
+like a confident person handling their own business — not a disclaimer, not
+tentative, not hedged — because it's standing in as someone's only voice in
+the exchange, and a hedged, mumbled delivery doesn't get taken seriously by
+the other person.
+
+**Flagged, not addressed:** phone mode has a real safety-category screening
+layer (`domain/safety.ts` — domestic violence, minors, debt collection, legal
+counterparties) built specifically for the risk profile of *that* mode:
+delegating a hard conversation with someone the user has an existing, often
+fraught, relationship with. In-person mode's typical use case (a counter, a
+till, a reception desk) is a different risk surface, but nothing stops it
+being pointed at a higher-stakes interaction. No equivalent screening exists
+for this mode yet. Not built here — scope note only, so it isn't silently
+assumed handled.
+
 [rtwebrtc]: https://developers.openai.com/api/docs/guides/realtime-webrtc
 
 ---

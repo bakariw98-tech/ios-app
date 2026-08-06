@@ -10,6 +10,16 @@ As of ADR-005 (`technical-decisions.md`), **in-person mode is the primary v1
 target.** The user types or speaks a quick brief and the AI starts talking it
 out loud immediately, live, in person — no phone call involved.
 
+**Who in-person mode is for:** people who can hear, understand, move, and
+type fine, but can't reliably produce live speech in the moment — severe
+stutter, apraxia, ALS, post-stroke aphasia, non-verbal autism, selective
+mutism. Not a faster AAC typewriter — existing type-and-speak AAC apps
+already exist and aren't enough, because a real conversation is dynamic. The
+differentiator is carrying the live back-and-forth itself, and letting the
+user step back in — by a single tap, never by speaking, since that's exactly
+the unreliable channel — only for a decision only they can make. See ADR-005's
+amendment for the full framing and a design mistake it corrected.
+
 **Everything below this point describes phone-call mode**, which is the
 original design this repo started with. It's paused, not scrapped — the code,
 tests, and this document are all still accurate for it, and it stays reachable

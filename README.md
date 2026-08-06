@@ -2,12 +2,25 @@
 
 An assistant that helps you say what's hard to say.
 
+**Who it's for:** people who can hear, understand, move, and type fine, but
+can't reliably produce live speech in the moment — severe stutter, apraxia,
+ALS, post-stroke aphasia, non-verbal autism, selective mutism. Typing is often
+their strongest channel; it's specifically live spoken conversation that's
+unreliable. Type-a-sentence-and-speak-it AAC apps already exist and aren't
+enough, because real conversation is dynamic — a follow-up question means
+stopping to type a whole new sentence and making everyone wait. This carries
+the live back-and-forth itself.
+
 **Two modes.** In-person is primary: type a quick brief, the AI starts talking
 it out loud immediately, live, standing right there with you — ordering food,
-asking for a refund, whatever the brief is. Phone-call mode is paused, not
-removed: call in, get interviewed privately, merge the other person into the
-call, the AI speaks for you within the boundaries you set. See
-[ADR-005](docs/technical-decisions.md) for why the pivot and what carries over.
+asking for a refund, whatever the brief is. It listens and responds to
+whatever the other person says without the user re-typing every turn, and
+the user can interrupt or correct it with a single tap — never by having to
+speak — at any point. Phone-call mode is paused, not removed: call in, get
+interviewed privately, merge the other person into the call, the AI speaks
+for you within the boundaries you set. See
+[ADR-005](docs/technical-decisions.md) for why the pivot, who it's for in
+more detail, and what carries over.
 
 ## Read these first
 

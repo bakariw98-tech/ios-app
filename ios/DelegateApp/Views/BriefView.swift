@@ -14,6 +14,7 @@ struct BriefView: View {
 
     @State private var situationText: String = ""
     @State private var userFirstName: String = ""
+    @State private var correctionText: String = ""
     // @StateObject, not nested inside another ObservableObject: SwiftUI only
     // re-renders on changes to an object it observes directly. Wrapping this
     // inside a view model whose own @Published property held the client
@@ -115,21 +116,71 @@ struct BriefView: View {
             Text("Live")
                 .font(.headline)
 
-            Text("Hold the phone toward the conversation. I'll handle the back-and-forth — jump in any time.")
+            Text("Hold the phone toward the conversation. I'll handle the back-and-forth.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
+            // The single most important control on this screen. One tap,
+            // no typing, stops the AI immediately — this is not a
+            // "jump in verbally" affordance, it's built specifically because
+            // that assumption doesn't hold for this app's users. See
+            // RealtimeSessionClient.stopSpeaking().
+            Button {
+                session.stopSpeaking()
+            } label: {
+                Label("Wait — stop", systemImage: "hand.raised.fill")
+                    .font(.title3.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 18)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+
+            correctionEntry
+
             Button(role: .destructive) {
                 session.stop()
             } label: {
-                Label("End", systemImage: "stop.fill")
+                Label("End", systemImage: "xmark.circle")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 10)
             }
             .buttonStyle(.bordered)
+            .controlSize(.small)
         }
         .padding(.top, 20)
+    }
+
+    /// Secondary to the Stop button above, not a replacement for it — this
+    /// is for "say THIS instead," not for the fast "stop now" case, which
+    /// stays a single tap with nothing to type.
+    private var correctionEntry: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Say something specific")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            HStack(spacing: 8) {
+                TextField("Type a correction…", text: $correctionText)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(sendCorrection)
+
+                Button {
+                    sendCorrection()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                }
+                .disabled(correctionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func sendCorrection() {
+        session.sendCorrection(correctionText, from: userFirstName)
+        correctionText = ""
     }
 
     private var endedView: some View {
@@ -139,6 +190,7 @@ struct BriefView: View {
 
             Button("Say something else") {
                 situationText = ""
+                correctionText = ""
                 session.reset()
             }
             .buttonStyle(.borderedProminent)

@@ -49,11 +49,22 @@ app will not compile without it — `RealtimeSessionClient.swift` imports
   needs real-device testing before relying on it. If it's not good enough,
   the fallback is a Bluetooth/wired earpiece (mic and speaker no longer share
   one open acoustic path) — not built, no UI for it yet.
-- **Data channel events aren't parsed.** `oai-events` messages (`response.done`,
-  `error`, etc.) are currently just printed to the console. A real UI
-  probably wants at least `error` surfaced to `RealtimeSessionClient.state`
-  and some signal for "the model is currently speaking" vs "listening."
+- **Outgoing data channel events exist; incoming ones still aren't parsed.**
+  `RealtimeSessionClient` can now *send* over `oai-events`
+  (`stopSpeaking()` → `response.cancel`, `sendCorrection(_:from:)` →
+  `conversation.item.create` + `response.create` — see ADR-005's amendment
+  for why these exist and the exact correction-marker format). What it
+  receives is still just printed to the console. A real UI probably wants at
+  least `error` surfaced to `RealtimeSessionClient.state` and some signal for
+  "the model is currently speaking" vs "listening," ideally to visually
+  confirm a correction actually landed rather than trusting it silently.
   Structure exists (`RTCDataChannelDelegate`); the parsing doesn't yet.
+- **The non-verbal interrupt/correction path is the least-tested code in this
+  repo, by necessity.** It's built specifically for users who can't reliably
+  verify "did that work?" by ear in real time the way a typical tester would
+  — so getting this right on a real device, with real interruption timing,
+  matters more here than almost anywhere else in the app. Start here when
+  real-device testing becomes possible.
 - **Text-only brief input.** The brief pivot said "types (or speaks)" — only
   typing is built. Voice input for the brief itself (before the live session
   starts) would need `SFSpeechRecognizer` or similar; not started.

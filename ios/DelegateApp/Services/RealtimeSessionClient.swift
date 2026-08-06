@@ -30,6 +30,18 @@ import WebRTC
 /// speakerphone-like scenarios — the model can hear and interrupt itself.
 /// This needs real-device testing before relying on it; there is no way to
 /// verify it from source code alone.
+///
+/// **Who this is for, and why `stopSpeaking()`/`sendCorrection(_:from:)`
+/// exist:** this mode targets people who can hear, understand, move, and
+/// type fine, but can't reliably produce live speech in the moment — severe
+/// stutter, apraxia, ALS, post-stroke aphasia, non-verbal autism, selective
+/// mutism. The first version of this client assumed a spoken jump-in was a
+/// viable way to interrupt or correct the AI. That's backwards for exactly
+/// this population — unreliable live speech production is the entire reason
+/// they're using this. The interrupt path is a single tap
+/// (`stopSpeaking()`, sends `response.cancel`); a correction is typed, not
+/// spoken (`sendCorrection`, injected as a specially-marked conversation
+/// item — see that method's doc comment for why plain text isn't enough).
 @MainActor
 final class RealtimeSessionClient: NSObject, ObservableObject {
     enum State: Equatable {
@@ -84,6 +96,75 @@ final class RealtimeSessionClient: NSObject, ObservableObject {
         state = .ended
 
         try? AVAudioSession.sharedInstance().setActive(false)
+    }
+
+    // MARK: - Interrupting and correcting the AI, without speaking
+
+    /// Immediately stops whatever the AI is currently saying. This is the
+    /// primary interrupt mechanism, and it exists because the initial design
+    /// of this mode assumed the user could just speak up to interrupt or
+    /// correct the AI — which is wrong for exactly the population this mode
+    /// is for. Severe stutter, apraxia, ALS, non-verbal autism, selective
+    /// mutism: the whole premise is that live spoken production is the thing
+    /// that's unreliable for them, so "just talk over it" is not an
+    /// available fallback. This has to be a single, fast, zero-typing tap.
+    /// See docs/technical-decisions.md, ADR-005.
+    ///
+    /// Sends `response.cancel` — does not end the session or say anything on
+    /// its own. Pair with `sendCorrection` if there's something specific to
+    /// fix, or leave it at just this if the point was simply "stop."
+    func stopSpeaking() {
+        sendEvent(["type": "response.cancel"])
+    }
+
+    /// Injects a typed correction into the live conversation and prompts the
+    /// model to respond to it right away. Call `stopSpeaking()` first (or
+    /// let the UI do both in one tap) if the AI is mid-sentence and saying
+    /// something that needs to change immediately, not just going forward.
+    ///
+    /// The text is wrapped in an explicit marker (see
+    /// `Self.correctionMarker`) rather than sent as a bare user message,
+    /// because OpenAI Realtime has no separate channel for "the person this
+    /// AI represents" versus "whoever is talking into the shared mic" — both
+    /// arrive as the same `user` role. Without the marker, a typed
+    /// correction would be indistinguishable from something the other person
+    /// in the room just said. `domain/inPersonBrief.ts`'s
+    /// `buildInPersonInstructions` teaches the model this exact marker
+    /// format; the two sides are kept in sync by convention, documented in
+    /// both places, not by any shared code.
+    func sendCorrection(_ text: String, from name: String?) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let marked = Self.correctionMarker(text: trimmed, from: name)
+        sendEvent([
+            "type": "conversation.item.create",
+            "item": [
+                "type": "message",
+                "role": "user",
+                "content": [["type": "input_text", "text": marked]],
+            ],
+        ])
+        sendEvent(["type": "response.create"])
+    }
+
+    /// Kept identical in spirit to the prompt-side description in
+    /// `buildInPersonInstructions` — change one, change the other.
+    private static func correctionMarker(text: String, from name: String?) -> String {
+        let who = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = (who?.isEmpty == false) ? who! : "the person you're speaking for"
+        return "[TYPED CORRECTION FROM \(label) — NOT SPOKEN BY THE OTHER PERSON]: \(text)"
+    }
+
+    private func sendEvent(_ payload: [String: Any]) {
+        guard let dataChannel, dataChannel.readyState == .open else {
+            // Session isn't live yet, or already ended — nothing to send to.
+            // Not surfaced as an error: the UI only shows these controls
+            // during .live, so this should be unreachable in practice.
+            return
+        }
+        guard let json = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        dataChannel.sendData(RTCDataBuffer(data: json, isBinary: false))
     }
 
     /// Back to `.idle` so the brief form reappears. Safe to call whether the

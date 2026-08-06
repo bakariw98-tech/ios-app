@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BriefSchema,
+  CORRECTION_MARKER_PREFIX,
+  CORRECTION_MARKER_SUFFIX,
   buildInPersonInstructions,
 } from '../src/domain/inPersonBrief.js';
 
@@ -66,9 +68,35 @@ describe('buildInPersonInstructions', () => {
     expect(instructions).toMatch(/the person you are with/i);
   });
 
-  it('tells the model the user outranks the brief if they jump in', () => {
+  // This is the correction to the flawed initial assumption: the target
+  // population (severe stutter, apraxia, ALS, non-verbal autism, selective
+  // mutism) often cannot reliably produce live speech, which is the entire
+  // reason they're using this mode. "They'll jump in verbally" is not a
+  // safe fallback, so the prompt must not lean on it.
+  it('does not assume the user can verbally interrupt', () => {
     const instructions = buildInPersonInstructions({ situation: 'test' });
-    expect(instructions).toMatch(/they outrank the brief/i);
+    expect(instructions).toMatch(/may not be able to reliably speak/i);
+    expect(instructions).toMatch(/don't wait for them to jump in[\s\n]+verbally/i);
+  });
+
+  it('teaches the model the exact typed-correction marker format', () => {
+    const instructions = buildInPersonInstructions({ situation: 'test' });
+    expect(instructions).toContain(CORRECTION_MARKER_PREFIX);
+    expect(instructions).toContain(CORRECTION_MARKER_SUFFIX);
+    expect(instructions).toMatch(/full authority/i);
+    expect(instructions).toMatch(/never[\s\n]+read the bracket.*out loud/i);
+  });
+
+  it('tells the model being cut off mid-sentence is normal, not an error', () => {
+    const instructions = buildInPersonInstructions({ situation: 'test' });
+    expect(instructions).toMatch(/cut off mid-sentence/i);
+    expect(instructions).toMatch(/not a technical error/i);
+  });
+
+  it('instructs a confident, non-hedging delivery', () => {
+    const instructions = buildInPersonInstructions({ situation: 'test' });
+    expect(instructions).toMatch(/confident/i);
+    expect(instructions).toMatch(/hedge, mumble, or undersell/i);
   });
 
   // This is the one property that most needs to hold: this mode has no
