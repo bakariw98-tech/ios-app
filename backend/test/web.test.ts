@@ -85,9 +85,11 @@ describe('GET /web', () => {
 
   // The intake step always runs, but must never become the landing state —
   // it only starts once the user has typed something and hit the button.
-  it('still starts in the idle state, not the intake state', async () => {
+  // Also starts on the in-person tab, not the phone-call tab — see ADR-005's
+  // phone-mode-in-web amendment.
+  it('still starts in the idle state, on the in-person tab', async () => {
     const body = await (await getWebPage()).text();
-    expect(body).toContain('<body data-state="idle">');
+    expect(body).toMatch(/<body data-state="idle" data-mode="in-person">/);
   });
 
   // Guards the product decision at the cheapest possible layer: Skip is
@@ -107,5 +109,61 @@ describe('GET /web', () => {
     const body = await (await getWebPage()).text();
     expect(body).toContain('id="intakeError"');
     expect(body).toContain('.inline-error');
+  });
+});
+
+// Phone-call mode's only surface here: a number to look at and a tel: link
+// to tap. See ADR-005's phone-mode-in-web amendment and routes/session.ts's
+// own doc comment for why this is deliberately the entire surface — no live
+// status, no transcript, no call-in-progress screen.
+describe('GET /web — phone-call tab', () => {
+  it('has both mode tabs, starting on in-person', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('id="tabInPerson"');
+    expect(body).toContain('id="tabCall"');
+  });
+
+  it('fetches the phone number from GET /session/start, the existing endpoint', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain("fetch('/session/start')");
+  });
+
+  // The load-bearing compliance guard: nothing on this page may ever POST to
+  // a session/call-placing path. routes/session.ts has no such endpoint to
+  // POST to in the first place, but this catches the page-side half of that
+  // guarantee directly, the same way the correction-marker test catches its
+  // half — regardless of what routes exist, the client must never attempt this.
+  it('never POSTs to any /session path — it only ever GETs the static number', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).not.toMatch(/fetch\(['"]\/session[^'"]*['"]\s*,\s*\{\s*method:\s*['"]POST['"]/);
+  });
+
+  it('renders the number as a tel: link, not a JS-driven dial action', async () => {
+    const body = await (await getWebPage()).text();
+    // A plain <a href="tel:..."> — the browser/OS handles the actual dial,
+    // same as CallViewModel.dial in ios/DelegateApp/Views/CallView.swift
+    // handing off to UIApplication.shared.open(tel://...). Nothing here is a
+    // button wired to a fetch or an API call that places anything.
+    expect(body).toContain('id="callButton"');
+    expect(body).toMatch(/<a class="btn-call" id="callButton"/);
+    expect(body).toContain('tel:');
+  });
+
+  it('surfaces the exact instructions text /session/start already returns', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('id="callInstructionBefore"');
+    expect(body).toContain('id="callInstructionMerge"');
+    expect(body).toContain('parsedBody.instructions');
+  });
+
+  it('exposes window.__sessionStart as a test hook', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('window.__sessionStart');
+  });
+
+  it('never embeds anything shaped like a real Vapi key or webhook secret', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).not.toContain('VAPI_API_KEY');
+    expect(body).not.toContain('VAPI_WEBHOOK_SECRET');
   });
 });

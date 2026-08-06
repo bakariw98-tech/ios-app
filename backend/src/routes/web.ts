@@ -25,6 +25,17 @@
  * reasoning as the Stop button below, applied to setup instead of mid-call.
  * See ADR-005's intake amendment in docs/technical-decisions.md.
  *
+ * Also now has a second tab surfacing phone-call mode's `GET /session/start`
+ * — a phone number plus a tap-to-dial `tel:` link, exactly mirroring
+ * `ios/DelegateApp/Views/CallView.swift`. This is deliberately the ONLY
+ * phone-mode surface added here: no live status, no transcript, no
+ * call-in-progress screen. `routes/session.ts`'s own doc comment states
+ * plainly why — "there is no endpoint that places a call... the human dials
+ * it" (ADR-001's N4 compliance posture, docs/compliance.md) — and a browser
+ * has no mechanism analogous to iOS's unbuilt CallKit-observation option to
+ * even find out a call happened, let alone show it live. See
+ * docs/technical-decisions.md's phone-mode-in-web amendment.
+ *
  * Deliberately kept as an internal engineering tool, not a second product
  * surface: no auth (matches `/realtime/session`, which already has none —
  * this doesn't add a new privilege, it just makes an already-public,
@@ -60,6 +71,20 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   h1 { font-size: 1.3rem; margin-bottom: 4px; }
   .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 24px; }
 
+  /* Top-level mode switch (in-person vs. phone-call), orthogonal to
+     data-state below — data-state only ever governs which in-person screen
+     shows, unchanged by this. Defaults to in-person so nothing about the
+     existing flow's starting point changes. */
+  .mode-panel { display: none; }
+  body[data-mode="in-person"] .mode-in-person { display: block; }
+  body[data-mode="call"] .mode-call { display: block; }
+  .tab-row { display: flex; gap: 8px; margin-bottom: 20px; }
+  .tab-button {
+    flex: 1; margin-top: 0; padding: 10px; font-size: 0.9rem; font-weight: 600;
+    background: #e5e7eb; color: #555;
+  }
+  .tab-button.active { background: #111; color: white; }
+
   /* Every .screen is hidden by default; body[data-state] turns the matching
      one on. data-state is also the Playwright test hook — see e2e/run.mjs. */
   .screen { display: none; }
@@ -71,6 +96,20 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   body[data-state="ended"] .screen-ended { display: block; }
   .error-banner { display: none; }
   body[data-state="failed"] .error-banner { display: block; }
+
+  /* Phone number, made to look like a real tel: link a person taps — see
+     .btn-call below, not the recessive default browser link styling. */
+  .call-number {
+    font-size: 1.6rem; font-weight: 700; text-align: center; margin: 20px 0 8px;
+    letter-spacing: 0.02em;
+  }
+  .btn-call {
+    display: block; text-decoration: none; text-align: center;
+    background: #16a34a; color: white; font-weight: 700; font-size: 1.1rem;
+    padding: 18px; border-radius: 10px; margin-top: 8px;
+  }
+  .call-instructions { margin-top: 20px; font-size: 0.9rem; }
+  .call-instructions p { margin: 10px 0; }
 
   label { display: block; font-size: 0.85rem; font-weight: 600; margin: 16px 0 4px; }
   input[type="text"], textarea {
@@ -155,7 +194,13 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   }
 </style>
 </head>
-<body data-state="idle">
+<body data-state="idle" data-mode="in-person">
+  <div class="tab-row">
+    <button class="tab-button active" id="tabInPerson">In-person</button>
+    <button class="tab-button" id="tabCall">Phone call</button>
+  </div>
+
+  <div class="mode-panel mode-in-person">
   <h1>In-person mode</h1>
   <p class="subtitle">
     Internal test client — verifies the same WebRTC + correction protocol as
@@ -226,6 +271,30 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   </div>
 
   <div id="debugLog"></div>
+  </div>
+
+  <div class="mode-panel mode-call">
+    <h1>Phone-call mode</h1>
+    <p class="subtitle">
+      Paused, not removed — see ADR-005. This tab only ever shows a number to
+      dial; nothing here places a call. See
+      <code>routes/session.ts</code>'s own doc comment and ADR-001's N4
+      compliance posture in <code>docs/technical-decisions.md</code>.
+    </p>
+
+    <div id="callLoading">Loading…</div>
+    <div class="inline-error" id="callError" hidden></div>
+
+    <div id="callLoaded" hidden>
+      <div class="call-number" id="callNumber"></div>
+      <a class="btn-call" id="callButton" href="#">Call</a>
+
+      <div class="call-instructions">
+        <p id="callInstructionBefore"></p>
+        <p id="callInstructionMerge"></p>
+      </div>
+    </div>
+  </div>
 
 <script type="module">
   // ---------------------------------------------------------------------
@@ -243,6 +312,8 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   //   window.__lastIntakeReply the last parsed /intake/turn response body
   //   window.__startedWith     the exact brief object POSTed to /realtime/session — lets a
   //                            checker confirm the enriched paragraph reached it unchanged
+  //   window.__sessionStart    the parsed GET /session/start response, once the Phone call
+  //                            tab has been opened — { phoneNumber, instructions }
   // ---------------------------------------------------------------------
   window.__sentLog = [];
   window.__intakeTurns = [];
@@ -250,6 +321,16 @@ export const WEB_CLIENT_HTML = `<!doctype html>
 
   const body = document.body;
   const $ = (id) => document.getElementById(id);
+
+  const tabInPerson = $('tabInPerson');
+  const tabCall = $('tabCall');
+  const callLoading = $('callLoading');
+  const callError = $('callError');
+  const callLoaded = $('callLoaded');
+  const callNumber = $('callNumber');
+  const callButton = $('callButton');
+  const callInstructionBefore = $('callInstructionBefore');
+  const callInstructionMerge = $('callInstructionMerge');
 
   const situationInput = $('situationInput');
   const nameInput = $('nameInput');
@@ -278,6 +359,71 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   function log(line) {
     const time = new Date().toISOString().slice(11, 19);
     debugLog.textContent = \`[\${time}] \${line}\\n\` + debugLog.textContent;
+  }
+
+  // --- Mode tabs (in-person vs. phone-call) ---------------------------
+
+  tabInPerson.addEventListener('click', () => setMode('in-person'));
+  tabCall.addEventListener('click', () => setMode('call'));
+
+  function setMode(mode) {
+    body.dataset.mode = mode;
+    tabInPerson.classList.toggle('active', mode === 'in-person');
+    tabCall.classList.toggle('active', mode === 'call');
+    if (mode === 'call') loadCallScreen();
+  }
+
+  let callScreenLoaded = false;
+
+  // Fetched once per page load, lazily, the first time the tab is opened —
+  // GET /session/start returns a static phone number, never anything
+  // call-specific, so there is nothing to refresh on repeat visits.
+  async function loadCallScreen() {
+    if (callScreenLoaded) return;
+    callScreenLoaded = true;
+
+    try {
+      const res = await fetch('/session/start');
+      const parsedBody = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          \`/session/start \${res.status}: \${parsedBody.error || 'unknown error'}\`,
+        );
+      }
+      window.__sessionStart = parsedBody;
+
+      callNumber.textContent = formatPhoneNumber(parsedBody.phoneNumber);
+      // tel: wants raw digits (plus a leading +), not the display format —
+      // same construction as CallViewModel.dial in
+      // ios/DelegateApp/Views/CallView.swift. This is a plain anchor tag:
+      // tapping it hands off to the OS's own dialler, exactly as if the
+      // number had been typed by hand. Nothing on this page places a call.
+      callButton.href = \`tel:\${parsedBody.phoneNumber.replace(/[^\\d+]/g, '')}\`;
+      callInstructionBefore.textContent = parsedBody.instructions?.before ?? '';
+      callInstructionMerge.textContent = parsedBody.instructions?.merge ?? '';
+
+      callLoading.hidden = true;
+      callLoaded.hidden = false;
+    } catch (error) {
+      callScreenLoaded = false; // allow retry by switching tabs again
+      callLoading.hidden = true;
+      callError.hidden = false;
+      callError.textContent = String(error && error.message ? error.message : error);
+    }
+  }
+
+  // Cosmetic only — display format, never what's sent as the tel: target.
+  // Falls back to the raw string for anything that isn't an 11-digit +1
+  // number, rather than mangling an unexpected format.
+  function formatPhoneNumber(raw) {
+    const digits = (raw || '').replace(/\\D/g, '');
+    if (digits.length === 11 && digits[0] === '1') {
+      return \`(\${digits.slice(1, 4)}) \${digits.slice(4, 7)}-\${digits.slice(7)}\`;
+    }
+    if (digits.length === 10) {
+      return \`(\${digits.slice(0, 3)}) \${digits.slice(3, 6)}-\${digits.slice(6)}\`;
+    }
+    return raw;
   }
 
   situationInput.addEventListener('input', () => {

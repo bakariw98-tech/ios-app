@@ -700,6 +700,62 @@ client, and a confirmation screen is a fifth screen of friction for a
 population this ADR has repeatedly weighed that cost against. Worth
 revisiting once this leaves internal-tool status.
 
+### Amendment — phone-call mode gets a tab in `/web`, deliberately a thin one
+
+**Trigger:** now that `/web` has a real UI (tabs, live screens, the intake
+flow above), the ask was to "integrate" the phone number phone-call mode
+already has — put a button on it.
+
+**What was built:** a second tab, "Phone call," that calls the existing
+`GET /session/start` (`routes/session.ts`, unchanged) and renders its
+`phoneNumber` as a large tap-to-dial `<a href="tel:...">` plus the two
+instruction lines the endpoint already returns. That is the **entire**
+surface added. No live call status, no transcript, no call-in-progress
+screen, no new backend route.
+
+**Why the scope stops there — two independent reasons, either one alone
+would be sufficient:**
+
+1. **Compliance.** `routes/session.ts`'s own doc comment states the
+   constraint outright: "there is no endpoint that places a call... The
+   human dials it." This isn't a technical shortcut, it's ADR-001's N4
+   posture (`docs/compliance.md`): the product's TCPA defense rests on a
+   conjunction of properties, one of which is that every leg of every call
+   is placed by a human, from their own device, never by this app's
+   infrastructure. A "Call" button that had the *browser* or *backend*
+   originate the call — even just to make a status screen possible — would
+   cross the exact line N4 exists to hold, and `compliance.md`'s own
+   "revisit triggers" list names this scenario explicitly: "anyone proposes
+   a server-initiated outbound mode." So the only thing a button can
+   legitimately do here is what `CallView.swift` already does on iOS: open
+   `tel:` and hand off to the OS's own dialler. `formatPhoneNumber()` in
+   `web.ts` is cosmetic only — the raw digits are what actually go in the
+   `tel:` href, same construction as `CallViewModel.dial`.
+2. **Nothing can observe a call happening, on any platform.** Even without
+   the compliance constraint, a live status/transcript screen needs to know
+   *which* call is whose — and nothing does. `session.ts`'s `/session/start`
+   returns before any call exists (it's a pure, stateless read of static
+   config); a `callId` only comes into being later, when Vapi's own webhook
+   fires for a real PSTN call already in progress, and nothing correlates
+   that back to a particular browser tab or phone. `ios/README.md` already
+   documents this exact gap for iOS ("the app cannot observe a phone call"),
+   with three options, none built: `CXCallObserver`/CallKit (an iOS system
+   framework — **no browser equivalent exists at all**, this option doesn't
+   degrade for web, it's simply absent), a spoken code read back over the
+   call and typed into the UI (the one option that's actually
+   platform-agnostic — it depends only on the assistant speaking a code and
+   a human typing it back, so it would work identically on `/web`), or
+   matching on the caller's own number server-side (needs a phone number on
+   file and Vapi's webhook to expose caller ANI — `store.ts`'s explicit
+   design policy is to never store recipient numbers at all, "we never
+   learn them... and we should keep it that way").
+
+**Not decided here, worth a real answer before building it:** if live status
+ever gets built, the spoken-code-readback approach is the only one of the
+three with no browser-specific disqualifier — but it's a real second
+project (a new webhook path, an interview-prompt change, new UI to enter and
+confirm the code), not an extension of a button. Flagged, not scoped.
+
 [rtwebrtc]: https://developers.openai.com/api/docs/guides/realtime-webrtc
 
 ---

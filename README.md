@@ -55,7 +55,7 @@ Cloudflare Worker backed by D1, deployed by GitHub Actions on push — see
 ```bash
 cd backend
 npm ci
-npm test                  # 177 tests
+npm test                  # 191 tests
 npm run typecheck
 npx wrangler dev          # optional, local only
 ```
@@ -85,6 +85,13 @@ check of the parts that don't need a human in the room; the rest (hearing it
 talk, tapping Stop mid-sentence, sending a correction) still needs you.
 
 ### Phone mode
+
+`/web` also has a "Phone call" tab now — shows the number from
+`GET /session/start` as a tap-to-dial `tel:` link, mirroring iOS's
+`CallView`. That's the entire surface; no live status or transcript there,
+deliberately — see ADR-005's phone-mode-in-web amendment in
+`docs/technical-decisions.md` for why (compliance, and nothing on any
+platform can currently observe a call in progress).
 
 `npm test` includes `test/lifecycle.test.ts`, which drives a whole call
 through the real webhook with Vapi faked at the `fetch` boundary, and the
