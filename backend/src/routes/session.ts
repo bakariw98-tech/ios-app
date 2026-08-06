@@ -17,9 +17,17 @@ export function registerSessionRoutes(app: Hono<AppBindings>): void {
    *
    * Returns a number for the user to dial — it does not dial anything.
    */
-  app.get('/session/start', (c) =>
-    c.json({
-      phoneNumber: c.get('config').vapi.phoneNumber,
+  app.get('/session/start', (c) => {
+    const { vapi } = c.get('config');
+    if (!vapi) {
+      // Phone mode is paused, not deleted — see ADR-005. A deploy running
+      // only in-person mode is expected to hit this and should get a clear
+      // "not available" rather than a crash.
+      return c.json({ error: 'phone-call mode is not configured' }, 503);
+    }
+
+    return c.json({
+      phoneNumber: vapi.phoneNumber,
       instructions: {
         before:
           "Tap to call. I'll ask you about what's going on before anyone else " +
@@ -28,8 +36,8 @@ export function registerSessionRoutes(app: Hono<AppBindings>): void {
           "When you're ready, tap Add Call, dial them, then tap Merge Calls. " +
           "I'll hear them and introduce myself.",
       },
-    }),
-  );
+    });
+  });
 
   app.get('/session/:callId/status', async (c) => {
     const record = await c.get('store').get(c.req.param('callId'));

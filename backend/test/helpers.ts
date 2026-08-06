@@ -13,9 +13,8 @@ export const testConfig: Config = {
     phoneNumber: '+15551234567',
     phoneNumberId: 'test-phone-id',
     baseUrl: 'https://api.vapi.test',
+    webhookUrl: 'https://example.test/vapi/webhook',
   },
-  serverUrl: 'https://example.test',
-  webhookUrl: 'https://example.test/vapi/webhook',
 };
 
 export function makeApp(store: MemoryStore) {

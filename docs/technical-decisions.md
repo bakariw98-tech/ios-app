@@ -287,6 +287,127 @@ looked at immediately, not aggregated into a dashboard.
 
 ---
 
+## ADR-005 — Pivot: in-person mode becomes primary, phone-call mode pauses
+
+**Decision, from the user, verbatim redirect:** build a new v1 target — the
+user types or speaks a brief, the AI starts talking it out loud immediately,
+live, in person. No phone, no dialing, no call merge. If the other person
+responds, the AI hears it through the phone's mic and answers live. The AI
+only pauses to ask the user something when it hits a decision only they can
+make. Phone-call mode (Vapi, Twilio, merge, disclosure) is paused, not
+scrapped — same underlying Realtime engine, wired back in later as a second
+entry point.
+
+This session's earlier work (ADR-001 through ADR-004, the whole compliance
+apparatus in `docs/compliance.md`) is about **phone-call mode specifically**
+and stays intact, unmodified, and reachable. None of it applies to in-person
+mode, for a structural reason below, not because it was relaxed.
+
+### Why in-person mode needs none of the phone-mode compliance machinery
+
+Phone-call mode's entire apparatus — the merge window, the mandatory
+disclosure, the consent gate, the interview/delegate split — exists to solve
+one problem: a recipient who didn't expect the call is about to hear an AI
+speak, and TCPA plus basic decency require they be told what's happening and
+agree to continue *before* anything substantive is said (see
+`docs/compliance.md`).
+
+In-person mode has no equivalent problem, structurally, not by policy
+choice:
+
+- **There is no telephony call.** TCPA governs calls to a phone. This is a
+  live voice interaction happening in the same physical room. It doesn't
+  reach a "call" in any interpretation that matters here.
+- **There is no private phase to protect.** Phone mode's merge window exists
+  because the interview is private and the recipient must never overhear it
+  unconsented. Here, the user is standing right there for the entire
+  interaction — there's nothing said that they didn't just say themselves,
+  moments earlier, to the same device.
+- **The closest existing category is assistive/AAC technology**, not
+  telemarketing: a speech-generating device for someone who can't or would
+  rather not say something themselves, operated in the open, by the person
+  it represents, who is present the whole time. Existing AAC devices carry no
+  disclosure requirement, and this doesn't either.
+
+None of that is a loophole being exploited — it's the actual shape of the
+product being different enough that the phone-mode reasoning doesn't
+transfer. If a future feature blurs this (e.g. leaving the phone with the
+other party, or the user stepping away mid-conversation), that changes the
+analysis and needs revisiting against `docs/compliance.md`'s reasoning
+before shipping.
+
+### Architecture: direct OpenAI Realtime over WebRTC, not Vapi
+
+Vapi added value for phone mode specifically — a phone number, PSTN
+bridging, and Realtime session orchestration over a call that doesn't exist
+here. There's no telephony leg to orchestrate, so there's no reason to pay
+Vapi's middleman cost or inherit its constraints (see ADR-001's whole
+saga). Instead:
+
+1. iOS app POSTs the brief to our backend (`POST /realtime/session`).
+2. Backend holds the real `OPENAI_API_KEY` and calls OpenAI's
+   `POST /v1/realtime/client_secrets` to mint a short-lived client secret,
+   pre-configured with the session's `instructions`, `model`, and `voice`.
+   Verified against
+   [developers.openai.com/api/docs/guides/realtime-webrtc][rtwebrtc] on
+   2026-08-06.
+3. Backend returns that ephemeral secret to the app — never the real key.
+4. The app opens a WebRTC peer connection **directly to OpenAI**, using the
+   ephemeral secret: create an offer, POST the SDP as `application/sdp` to
+   `https://api.openai.com/v1/realtime/calls` with
+   `Authorization: Bearer <ephemeral>`, apply the SDP answer that comes back.
+5. Audio flows client ↔ OpenAI directly from there. This Worker never
+   touches it.
+
+This is the architecture OpenAI itself documents for client apps (mint
+server-side, connect client-side), and it's the only sane one available:
+Cloudflare Workers can't relay raw WebRTC media, so a "backend proxies the
+audio" design was never on the table.
+
+### The real open risk: echo cancellation on speakerphone
+
+The AI's voice comes out the phone's own speaker; the same phone's mic has
+to pick up the *other* person's voice without also picking up the AI talking
+to itself. WebRTC ships built-in echo cancellation (enabled here via
+`AVAudioSession`'s `.voiceChatSpeaker` mode, which is what actually engages
+iOS's own AEC for a same-device speaker/mic pair), but multiple developers
+report this is only partially solved in practice on real devices in
+speakerphone-like scenarios — the model can hear and interrupt itself
+mid-sentence.
+
+This is treated the same way carrier-dependent three-way calling was treated
+in ADR-001: named as the single largest delivery risk, not silently assumed
+solved. It can only be resolved with a real device, in a real noisy room,
+not by reasoning about it further from source code. See `ios/README.md` for
+the fallback option (wired earpiece, not built) if it proves insufficient.
+
+### What carries over from phone mode, and what doesn't
+
+Carries over: the underlying Realtime API, the general shape of "give the
+model a brief, let it speak for you, keep it within what it was actually
+told." The delegate assistant's boundary-following instinct
+(`assistants/delegate.ts`'s `CONDUCT_RULES`) inspired the equivalent rules in
+`domain/inPersonBrief.ts`, rewritten for a live in-the-room exchange rather
+than a hard message delivered once.
+
+Does not carry over, deliberately: the two-assistant split, the merge
+window, the disclosure string, the consent gate, the intent-object interview
+step. In-person mode is one continuous session from a single brief — there's
+no separate private phase to hand off *from*.
+
+### Config decoupling this required
+
+Before this pivot, `buildConfig` treated the four Vapi secrets as globally
+required — the whole Worker refused to boot without them. That's now wrong:
+an in-person-only deploy shouldn't need Vapi configured at all. `vapi` and
+`openai` are now independent optional blocks in `Config`; each route checks
+only the block it needs and answers `503` (not a 500 crash) if its mode
+isn't configured. See `backend/src/lib/config.ts`.
+
+[rtwebrtc]: https://developers.openai.com/api/docs/guides/realtime-webrtc
+
+---
+
 ## Incidental decisions
 
 - **Node over Python** for the backend. The brief left it TBD. Node, because the

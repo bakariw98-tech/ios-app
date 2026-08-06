@@ -4,7 +4,21 @@
 > Changes to the "Core call flow" or "Compliance non-negotiables" sections require
 > re-checking the legal reasoning in [`compliance.md`](./compliance.md) first.
 
-## What this is
+## Status: two modes, in-person is primary
+
+As of ADR-005 (`technical-decisions.md`), **in-person mode is the primary v1
+target.** The user types or speaks a quick brief and the AI starts talking it
+out loud immediately, live, in person — no phone call involved.
+
+**Everything below this point describes phone-call mode**, which is the
+original design this repo started with. It's paused, not scrapped — the code,
+tests, and this document are all still accurate for it, and it stays reachable
+as a second entry point in the app. Read ADR-005 before assuming any of the
+compliance reasoning below (disclosure, consent, the merge window) applies to
+in-person mode — it doesn't, structurally, not because it was relaxed. See
+`docs/compliance.md`'s own note at the top for the in-person equivalent.
+
+## What phone-call mode is
 
 An iOS app that helps someone say the things they find difficult to say. The user
 calls in, an AI interviews them to understand the situation, then the user brings
@@ -14,7 +28,7 @@ time, staying within boundaries the user set.
 Framed to users as: **"an assistant that helps you say what's hard to say."**
 Never marketed or described as "a phone agent that calls people for you."
 
-## Core call flow (locked in)
+## Core call flow (locked in, phone mode only)
 
 1. User opens the app, taps a button, and **dials the number themselves**. No
    autodialing, no server-initiated outbound call to the recipient — ever.

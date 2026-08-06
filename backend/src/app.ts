@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 
 import { type Config, type Env, buildConfig } from './lib/config.js';
 import { D1Store, type Store } from './lib/store.js';
+import { registerRealtimeRoutes } from './routes/realtime.js';
 import { registerSessionRoutes } from './routes/session.js';
 import { registerWebhookRoutes } from './routes/webhook.js';
 
@@ -46,8 +47,19 @@ export function buildApp(options: AppOptions = {}) {
 
   registerWebhookRoutes(app);
   registerSessionRoutes(app);
+  registerRealtimeRoutes(app);
 
-  app.get('/health', (c) => c.json({ ok: true }));
+  // Reports which mode(s) are actually usable, not just that the process is
+  // alive — there's no log-tailing tool in this deployment's toolset, so this
+  // is the fastest way to confirm from outside whether a deploy's secrets
+  // landed correctly, without needing to trigger a real call or session.
+  app.get('/health', (c) => {
+    const config = c.get('config');
+    return c.json({
+      ok: true,
+      modes: { phone: Boolean(config.vapi), inPerson: Boolean(config.openai) },
+    });
+  });
 
   return app;
 }

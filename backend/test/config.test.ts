@@ -1,18 +1,27 @@
 /**
- * Secret validation.
+ * Secret validation and mode decoupling.
  *
- * Motivated by a real incident: the Cloudflare deploy token arrived containing
- * Cyrillic homoglyphs, which took several rounds to spot because the value
- * looked correct on screen. The same mistake in a Vapi secret would surface as
- * a failed call rather than a failed deploy, so it's worth catching at config
- * time with a message that names the problem.
+ * Two things this file protects:
+ *
+ * 1. Contamination checking. Motivated by a real incident: the Cloudflare
+ *    deploy token arrived containing Cyrillic homoglyphs, which took several
+ *    rounds to spot because the value looked correct on screen. The same
+ *    mistake in a secret here would surface as a silent runtime failure, so
+ *    it's worth catching at config time with a message that names the
+ *    problem.
+ *
+ * 2. Mode decoupling (ADR-005). Phone-call mode (Vapi) is paused; in-person
+ *    mode (direct OpenAI Realtime) is the current primary target. Neither
+ *    should gate the other — a deploy with only OPENAI_API_KEY set must boot
+ *    cleanly, and a deploy with only Vapi secrets set (for anyone still
+ *    running phone mode) must boot without OPENAI_API_KEY.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import { type Env, buildConfig } from '../src/lib/config.js';
 
-const clean: Env = {
+const vapiOnly: Env = {
   VAPI_API_KEY: 'abc123def456',
   VAPI_WEBHOOK_SECRET: 'a-long-random-secret',
   VAPI_PHONE_NUMBER: '+15551234567',
@@ -21,41 +30,87 @@ const clean: Env = {
   DB: {} as never,
 };
 
-describe('required secrets', () => {
-  it('builds a config when everything is present and clean', () => {
-    const config = buildConfig(clean);
-    expect(config.vapi.phoneNumber).toBe('+15551234567');
-    expect(config.webhookUrl).toBe('https://example.workers.dev/vapi/webhook');
+const openaiOnly: Env = {
+  OPENAI_API_KEY: 'sk-test-abc123',
+  DB: {} as never,
+};
+
+describe('mode decoupling', () => {
+  it('boots with neither mode configured', () => {
+    const config = buildConfig({ DB: {} as never });
+    expect(config.vapi).toBeUndefined();
+    expect(config.openai).toBeUndefined();
+  });
+
+  it('configures only in-person mode when just OPENAI_API_KEY is set', () => {
+    const config = buildConfig(openaiOnly);
+    expect(config.openai).toEqual({ apiKey: 'sk-test-abc123' });
+    expect(config.vapi).toBeUndefined();
+  });
+
+  it('configures only phone mode when just the Vapi secrets are set', () => {
+    const config = buildConfig(vapiOnly);
+    expect(config.vapi).toBeDefined();
+    expect(config.openai).toBeUndefined();
+  });
+
+  it('configures both when both are set', () => {
+    const config = buildConfig({ ...vapiOnly, ...openaiOnly });
+    expect(config.vapi).toBeDefined();
+    expect(config.openai).toBeDefined();
+  });
+
+  it('rejects a partial Vapi configuration rather than silently disabling it', () => {
+    // Missing PUBLIC_SERVER_URL only — the other three Vapi secrets are set,
+    // which is very unlikely to be intentional (more likely: one secret
+    // never got added, or was deleted while rotating something else).
+    const { PUBLIC_SERVER_URL: _drop, ...partial } = vapiOnly;
+    expect(() => buildConfig(partial)).toThrow(
+      /partially configured: missing PUBLIC_SERVER_URL/,
+    );
+  });
+
+  it('names every missing field in a partial Vapi configuration', () => {
+    const { VAPI_API_KEY: _a, VAPI_WEBHOOK_SECRET: _b, ...partial } = vapiOnly;
+    expect(() => buildConfig(partial)).toThrow(
+      /VAPI_API_KEY, VAPI_WEBHOOK_SECRET/,
+    );
+  });
+});
+
+describe('Vapi config shape', () => {
+  it('builds vapi.webhookUrl from PUBLIC_SERVER_URL', () => {
+    const config = buildConfig(vapiOnly);
+    expect(config.vapi?.phoneNumber).toBe('+15551234567');
+    expect(config.vapi?.webhookUrl).toBe(
+      'https://example.workers.dev/vapi/webhook',
+    );
+  });
+
+  it('strips a trailing slash from the server URL before building webhookUrl', () => {
+    const config = buildConfig({
+      ...vapiOnly,
+      PUBLIC_SERVER_URL: 'https://example.workers.dev///',
+    });
+    expect(config.vapi?.webhookUrl).toBe(
+      'https://example.workers.dev/vapi/webhook',
+    );
   });
 
   it('does not require VAPI_PHONE_NUMBER_ID', () => {
     // Nothing in the codebase reads this value, and it's fiddly to locate in
-    // Vapi's dashboard — gating startup on it is a pointless deploy blocker.
-    const { VAPI_PHONE_NUMBER_ID: _unused, ...withoutId } = clean;
-    expect(() => buildConfig(withoutId)).not.toThrow();
-    expect(buildConfig(withoutId).vapi.phoneNumberId).toBeUndefined();
+    // Vapi's dashboard — gating on it is a pointless deploy blocker.
+    const { VAPI_PHONE_NUMBER_ID: _unused, ...withoutId } = vapiOnly;
+    const config = buildConfig(withoutId);
+    expect(config.vapi?.phoneNumberId).toBeUndefined();
   });
 
   it('still validates VAPI_PHONE_NUMBER_ID for contamination when present', () => {
     // Optional does not mean unchecked — a mangled value that IS supplied
     // should fail loudly now, not silently later.
     expect(() =>
-      buildConfig({ ...clean, VAPI_PHONE_NUMBER_ID: '111 222' }),
+      buildConfig({ ...vapiOnly, VAPI_PHONE_NUMBER_ID: '111 222' }),
     ).toThrow(/VAPI_PHONE_NUMBER_ID contains embedded whitespace/);
-  });
-
-  it('names every missing secret at once', () => {
-    expect(() =>
-      buildConfig({ ...clean, VAPI_API_KEY: '', PUBLIC_SERVER_URL: '' }),
-    ).toThrow(/VAPI_API_KEY, PUBLIC_SERVER_URL/);
-  });
-
-  it('strips a trailing slash from the server URL', () => {
-    const config = buildConfig({
-      ...clean,
-      PUBLIC_SERVER_URL: 'https://example.workers.dev///',
-    });
-    expect(config.serverUrl).toBe('https://example.workers.dev');
   });
 });
 
@@ -65,7 +120,7 @@ describe('malformed secrets', () => {
     // not Latin 'a'. Visually identical.
     const error = (() => {
       try {
-        buildConfig({ ...clean, VAPI_API_KEY: 'аbc123def456' });
+        buildConfig({ ...vapiOnly, VAPI_API_KEY: 'аbc123def456' });
       } catch (e) {
         return (e as Error).message;
       }
@@ -78,7 +133,7 @@ describe('malformed secrets', () => {
 
   it('rejects leading or trailing whitespace', () => {
     expect(() =>
-      buildConfig({ ...clean, VAPI_WEBHOOK_SECRET: 'secret-value ' }),
+      buildConfig({ ...vapiOnly, VAPI_WEBHOOK_SECRET: 'secret-value ' }),
     ).toThrow(/VAPI_WEBHOOK_SECRET has leading or trailing whitespace/);
   });
 
@@ -88,7 +143,7 @@ describe('malformed secrets', () => {
     // sitting in the file -- which is exactly the class of bug this check
     // exists to catch.
     expect(() =>
-      buildConfig({ ...clean, VAPI_PHONE_NUMBER_ID: 'abc\x00def' }),
+      buildConfig({ ...vapiOnly, VAPI_PHONE_NUMBER_ID: 'abc\x00def' }),
     ).toThrow(/VAPI_PHONE_NUMBER_ID contains/);
   });
 
@@ -99,15 +154,21 @@ describe('malformed secrets', () => {
     // copy-paste that grabbed a label ("Token: abc123"), both produce this
     // shape, and both are real mistakes worth catching.
     expect(() =>
-      buildConfig({ ...clean, VAPI_API_KEY: 'abc 123' }),
+      buildConfig({ ...vapiOnly, VAPI_API_KEY: 'abc 123' }),
     ).toThrow(/VAPI_API_KEY contains embedded whitespace/);
+  });
+
+  it('validates OPENAI_API_KEY the same way as every other secret', () => {
+    expect(() =>
+      buildConfig({ ...openaiOnly, OPENAI_API_KEY: 'sk-test ' }),
+    ).toThrow(/OPENAI_API_KEY has leading or trailing whitespace/);
   });
 
   it('reports every contaminated secret, not just the first', () => {
     const error = (() => {
       try {
         buildConfig({
-          ...clean,
+          ...vapiOnly,
           VAPI_API_KEY: 'аbc',
           VAPI_PHONE_NUMBER: '+1555Е0000',
         });
@@ -123,7 +184,7 @@ describe('malformed secrets', () => {
   it('never echoes the secret value itself', () => {
     const error = (() => {
       try {
-        buildConfig({ ...clean, VAPI_API_KEY: 'аsuper-secret-value' });
+        buildConfig({ ...vapiOnly, VAPI_API_KEY: 'аsuper-secret-value' });
       } catch (e) {
         return (e as Error).message;
       }
@@ -135,7 +196,7 @@ describe('malformed secrets', () => {
   it('accepts ordinary ASCII punctuation that legitimately appears in secrets', () => {
     expect(() =>
       buildConfig({
-        ...clean,
+        ...vapiOnly,
         VAPI_WEBHOOK_SECRET: 'aB3_-.~+/=:@!#$%^&*()[]{}|<>?,;"\'`',
       }),
     ).not.toThrow();

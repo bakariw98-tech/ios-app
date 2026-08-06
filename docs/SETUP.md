@@ -4,6 +4,43 @@ The backend runs as a **Cloudflare Worker** and deploys from GitHub Actions on
 push. You never run a command locally — everything below is web UI plus a `git
 push`.
 
+> **This file predates the ADR-005 pivot and covers phone-call mode's setup**
+> (steps 1–6 below). In-person mode — now the primary target — needs exactly
+> one additional secret and no dashboard-side configuration at all. That's
+> covered in its own short section immediately below; skip straight to
+> **"In-person mode setup"** if phone mode isn't what you're setting up.
+
+## In-person mode setup (ADR-005, primary mode)
+
+One Worker secret, set the same way as any other (Cloudflare dashboard →
+Workers & Pages → conversation-delegation → Settings → Variables and Secrets
+→ add as a **Secret**):
+
+| Name | Value |
+| --- | --- |
+| `OPENAI_API_KEY` | A real OpenAI API key with Realtime API access and billing enabled. |
+
+That's it — no server URL to configure, no webhook secret, no dashboard-side
+setup analogous to Vapi's. The iOS app talks to OpenAI directly over WebRTC
+once our backend hands it a short-lived session credential; see ADR-005 in
+`docs/technical-decisions.md` for the full architecture.
+
+Confirm it landed: `GET /health` on your Worker should show
+`"modes":{"inPerson":true}`. If it shows `false`, the secret either isn't set
+or failed the same contamination check every secret gets (whitespace,
+non-ASCII characters) — the `/health` response won't say which, but any
+request to `/realtime/session` will, in its `detail` field, the same pattern
+used for the Vapi secrets below.
+
+The iOS side needs a WebRTC package added in Xcode before it will even
+compile — see `ios/README.md`. That, and real-device testing of echo
+cancellation on speakerphone, are the two things actually worth spending time
+on for this mode; nothing below this point is relevant to it.
+
+---
+
+## Phone-call mode setup (paused — see ADR-005)
+
 ## Why Workers rather than Render/Railway/Fly
 
 Vapi's `assistant-request` webhook has a **~7.5 second budget**: miss it and the

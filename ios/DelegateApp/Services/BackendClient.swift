@@ -20,6 +20,25 @@ actor BackendClient {
         try await get("session/start")
     }
 
+    /// Mints an OpenAI Realtime client secret for the in-person mode. See
+    /// backend/src/routes/realtime.ts. Throws `BackendError.status(503)` if
+    /// the backend has no `OPENAI_API_KEY` configured.
+    func startRealtimeSession(brief: Brief) async throws -> RealtimeSessionInfo {
+        var request = URLRequest(url: baseURL.appendingPathComponent("realtime/session"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(brief)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw BackendError.badResponse
+        }
+        guard http.statusCode == 200 else {
+            throw BackendError.status(http.statusCode)
+        }
+        return try decoder.decode(RealtimeSessionInfo.self, from: data)
+    }
+
     func status(callId: String) async throws -> CallStatus {
         try await get("session/\(callId)/status")
     }

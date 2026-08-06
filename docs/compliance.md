@@ -8,6 +8,15 @@
 > Engage counsel before scaling past a small number of active users/calls. The
 > reasoning below is sound for early, manual-scale use; it is not guaranteed to
 > hold at real product volume.
+>
+> **This entire document is about phone-call mode.** As of ADR-005
+> (`technical-decisions.md`), phone-call mode is paused and in-person mode is
+> primary. None of the machinery below (disclosure, consent, the merge window)
+> applies to in-person mode — there's no telephony call for TCPA to govern, and
+> no private phase to protect a third party from overhearing, since the user is
+> physically present for the whole interaction. That's a structural difference
+> in what the product does, not this reasoning being relaxed. See ADR-005 for
+> the full argument before assuming otherwise.
 
 ## Why the call flow is shaped the way it is
 

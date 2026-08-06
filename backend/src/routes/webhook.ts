@@ -152,10 +152,24 @@ export function registerWebhookRoutes(app: Hono<AppBindings>): void {
   app.get('/vapi/webhook', (c) => c.text('ok'));
 
   app.post('/vapi/webhook', async (c) => {
-    const config = c.get('config');
+    // Named vapiConfig, not vapi — this file also imports the Vapi API client
+    // module as `vapi` (`import * as vapi from '../lib/vapi.js'`), and
+    // shadowing that with a same-named local is exactly the kind of thing
+    // that reads fine today and bites the next edit.
+    const { vapi: vapiConfig } = c.get('config');
+    if (!vapiConfig) {
+      // Phone mode is paused-by-default now, not always-on — a deploy with
+      // only OPENAI_API_KEY set is a normal, supported state, not a bug. This
+      // is the honest response to Vapi calling a webhook we were never given
+      // credentials to serve, not a 500 (nothing is actually broken) and not
+      // a 401 (that would look like a secret mismatch and send someone back
+      // through the whole auth debugging loop for no reason).
+      return c.json({ error: 'phone-call mode is not configured' }, 503);
+    }
+
     const { value: provided, shape } = extractSecret(c);
     const matched =
-      provided !== null && secretsMatch(provided, config.vapi.webhookSecret);
+      provided !== null && secretsMatch(provided, vapiConfig.webhookSecret);
 
     logAuthAttempt(c, shape, provided?.length ?? null, matched);
 
@@ -185,10 +199,12 @@ export function registerWebhookRoutes(app: Hono<AppBindings>): void {
         return c.json(await handleToolCalls(c, message, callId));
 
       case 'handoff-destination-request':
-        return c.json(await handleHandoffRequest(c, message, callId));
+        return c.json(
+          await handleHandoffRequest(c, message, callId, vapiConfig),
+        );
 
       case 'assistant-request':
-        return c.json({ assistant: interviewAssistant(config.webhookUrl) });
+        return c.json({ assistant: interviewAssistant(vapiConfig.webhookUrl) });
 
       case 'end-of-call-report':
         return c.json(await handleEndOfCall(c, message, callId));
@@ -401,7 +417,8 @@ async function handleToolCalls(c: Ctx, message: VapiMessage, callId?: string) {
 async function handleHandoffRequest(
   c: Ctx,
   message: VapiMessage,
-  callId?: string,
+  callId: string | undefined,
+  vapiConfig: NonNullable<AppBindings['Variables']['config']['vapi']>,
 ) {
   const store = c.get('store');
   const parsed = IntentSchema.safeParse(message.variableValues);
@@ -450,7 +467,7 @@ async function handleHandoffRequest(
   return {
     destination: {
       type: 'assistant',
-      assistant: delegateAssistant(intent, c.get('config').webhookUrl),
+      assistant: delegateAssistant(intent, vapiConfig.webhookUrl),
     },
   };
 }

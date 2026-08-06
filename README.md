@@ -2,49 +2,74 @@
 
 An assistant that helps you say what's hard to say.
 
-You call in. It interviews you about the situation — what happened, what you want
-said, what must not be said. When you're ready you merge the other person into
-the same call, and it speaks for you, staying inside the boundaries you set.
-Afterwards you get a summary of how it went.
+**Two modes.** In-person is primary: type a quick brief, the AI starts talking
+it out loud immediately, live, standing right there with you — ordering food,
+asking for a refund, whatever the brief is. Phone-call mode is paused, not
+removed: call in, get interviewed privately, merge the other person into the
+call, the AI speaks for you within the boundaries you set. See
+[ADR-005](docs/technical-decisions.md) for why the pivot and what carries over.
 
 ## Read these first
 
 | | |
 | --- | --- |
-| [`docs/SETUP.md`](docs/SETUP.md) | Where the Vapi keys go and how to make the first call. |
-| [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md) | Scope and locked decisions. |
-| [`docs/compliance.md`](docs/compliance.md) | Why the flow is shaped this way, and the six rules enforced in code. |
-| [`docs/technical-decisions.md`](docs/technical-decisions.md) | ADRs answering the open Vapi questions. |
+| [`docs/technical-decisions.md`](docs/technical-decisions.md) | ADR-005 is the pivot: why in-person mode, the WebRTC architecture, the open echo-cancellation risk. ADR-001–004 are phone mode. |
+| [`docs/SETUP.md`](docs/SETUP.md) | Where the Cloudflare/Vapi keys go. Predates the pivot — `OPENAI_API_KEY` (below) isn't in it yet. |
+| [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md) | Phone-mode scope and locked decisions. Status note at the top points here. |
+| [`docs/compliance.md`](docs/compliance.md) | Phone-mode-only. Doesn't apply to in-person mode — see the note at its top. |
 
-**Before changing the call flow, read `docs/compliance.md`.** The AI's
-self-introduction is not a UX string — it's the mechanism the whole product rests
-on, and it is deliberately built so no prompt can skip it.
+**Before changing phone mode's call flow, read `docs/compliance.md`.** The
+AI's self-introduction there is not a UX string — it's the mechanism that
+mode's compliance rests on. In-person mode has no equivalent step, by design
+— see ADR-005 for why that's structural, not a relaxation.
 
 ## Layout
 
 ```
-backend/   Cloudflare Worker (Hono + D1). Vapi assistants, webhooks, MCP connector.
+backend/   Cloudflare Worker (Hono + D1). Both modes' routes, assistants, MCP connector.
 ios/       SwiftUI sources. No Xcode project yet — see ios/README.md.
 docs/      Brief, compliance reasoning, ADRs.
 ```
 
 ## Backend
 
-The backend is a **Cloudflare Worker** backed by D1, deployed by GitHub Actions
-on push — see [`docs/SETUP.md`](docs/SETUP.md). Nothing needs to run locally.
+Cloudflare Worker backed by D1, deployed by GitHub Actions on push — see
+[`docs/SETUP.md`](docs/SETUP.md). Nothing needs to run locally.
 
 ```bash
 cd backend
 npm ci
-npm test                  # 59 tests, including the compliance suite
+npm test                  # 115 tests
 npm run typecheck
 npx wrangler dev          # optional, local only
 ```
 
-`npm test` includes `test/lifecycle.test.ts`, which drives a whole call through
-the real webhook — interview, arming, the recipient arriving, handoff, end-of-call
-— with Vapi faked at the `fetch` boundary. The safety guards in it are
-mutation-tested; see the commit history for the five mutations they catch.
+The two modes are fully decoupled in config (`src/lib/config.ts`): a deploy
+with only `OPENAI_API_KEY` set boots fine and serves in-person mode; a deploy
+with only the four Vapi secrets set boots fine and serves phone mode. Each
+mode's routes answer `503` — not a crash — when their own mode isn't
+configured. `/health` reports which mode(s) are actually live.
+
+### In-person mode secrets (not yet in docs/SETUP.md)
+
+One Worker secret: `OPENAI_API_KEY` — a real OpenAI API key with Realtime
+access. Set it the same way as the Vapi secrets (Cloudflare dashboard →
+Workers & Pages → conversation-delegation → Settings → Variables and Secrets).
+Nothing else to configure — there's no dashboard-side setup analogous to
+Vapi's server URL, because the app talks to OpenAI directly.
+
+### Phone mode
+
+`npm test` includes `test/lifecycle.test.ts`, which drives a whole call
+through the real webhook with Vapi faked at the `fetch` boundary, and the
+safety guards in it are mutation-tested. As of this session, live auth against
+real Vapi is confirmed working (`/vapi/webhook` correctly authenticates and
+returns a valid assistant config). What was **not** resolved before the pivot:
+a real call connected and authenticated, then ended at the same millisecond it
+started, with zero transcript — a known Vapi failure signature ("call failed
+before it started"), most likely OpenAI Realtime access or credits not
+configured on Vapi's own side (`Settings → Provider Keys`) or Vapi account
+credits. Whoever picks phone mode back up should start there.
 
 The MCP connector runs separately over stdio:
 
@@ -53,32 +78,41 @@ npm run mcp
 ```
 
 It exposes `start_interview`, `get_call_status`, `get_summary` — and
-deliberately no `place_call`. Placing a call is always a human action.
+deliberately no `place_call`. Placing a call is always a human action. (Only
+meaningful for phone mode.)
+
+## iOS
+
+See [`ios/README.md`](ios/README.md) — it now covers both modes, including the
+**required WebRTC package** for in-person mode (Apple ships no first-party
+WebRTC framework) and the two biggest open risks: nothing has been compiled
+(no Swift toolchain in this environment), and echo cancellation on
+speakerphone is a documented-but-unsolved problem that needs a real device to
+resolve.
 
 ## Where this is up to
 
-**Done:** the three open technical questions are answered (ADR-001 to ADR-003).
-Backend domain layer, both Vapi assistant configs, webhook handler, MCP
-connector, and 22 passing tests including the compliance assertions.
+**In-person mode (primary):** backend fully built and tested — config
+decoupling, brief schema, prompt builder, ephemeral-session minting against
+OpenAI's verified API shape, 503-not-crash when unconfigured. iOS: WebRTC
+client and UI written but never compiled; the REST handshake follows OpenAI's
+documented flow, the WebRTC library calls are the most likely thing to need
+fixing on first real build.
 
-**Not done:**
-
-- **Nothing has run against real Vapi.** Every assistant config here is written
-  from documentation, not from a call that happened. The lifecycle harness fakes
-  Vapi at the `fetch` boundary, so it proves our state machine is coherent — not
-  that our idea of Vapi's payloads is right. Expect the first live call to
-  surface shape mismatches.
-- **The iOS app has not been compiled** — no Swift toolchain where it was
-  written. It also can't yet learn a call id, so the transcript and summary
-  screens aren't reachable. See [`ios/README.md`](ios/README.md).
-- **The merge step is unvalidated on real carriers.** This is the largest
-  delivery risk in v1 — see ADR-001.
+**Phone mode (paused):** the three original open technical questions are
+answered (ADR-001–003), the merge-window detection design is ADR-004, and as
+of this session it's live-deployed with confirmed-working auth. The
+instant-end-no-transcript issue above is the actual next step if picked back
+up, not another round of webhook/secret debugging.
 
 ## Next
 
-1. Stand up a Vapi number and run one real call end to end. That will teach us
-   more than the next 500 lines of code.
-2. Build the carrier device matrix for three-way merge.
-3. Solve call-id association so the app can follow a live call (options in
-   `ios/README.md`).
-4. Engage counsel before opening this past a small pilot.
+1. **In-person mode:** get it into a real Xcode project, add the WebRTC
+   package, and find out on a real device whether echo cancellation actually
+   holds up on speakerphone. That answer matters more than anything else left
+   to build — see ADR-005.
+2. **Phone mode, if resumed:** check Vapi's Provider Keys / billing for the
+   OpenAI Realtime access that a call needs after our webhook already succeeds.
+3. Engage counsel before opening phone mode past a small pilot (in-person
+   mode's compliance analysis is different — see ADR-005 — but hasn't had the
+   same scrutiny applied yet either).
