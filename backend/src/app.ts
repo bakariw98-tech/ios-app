@@ -28,8 +28,17 @@ export function buildApp(options: AppOptions = {}) {
     try {
       c.set('config', options.config ?? buildConfig(c.env));
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('Configuration error:', error);
-      return c.json({ error: 'server misconfigured' }, 500);
+
+      // Safe to return, not just log: buildConfig's messages name only which
+      // secret is missing or malformed, never the value — that guarantee is
+      // asserted in test/config.test.ts ("never echoes the secret value
+      // itself"). The secret *names* are already public (wrangler.toml and
+      // docs/SETUP.md are committed), so nothing here is new information to
+      // an attacker. What it removes is a round trip through dashboard log
+      // tailing every time setup goes wrong.
+      return c.json({ error: 'server misconfigured', detail: message }, 500);
     }
     c.set('store', options.store ?? new D1Store(c.env.DB));
     await next();
