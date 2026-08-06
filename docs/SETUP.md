@@ -24,8 +24,13 @@ Already done, via this session:
 
 ## 2. Connect the repo to Cloudflare
 
-Cloudflare can pull from GitHub directly — **no GitHub secrets, no API token, no
-GitHub Actions.** This is the recommended path.
+**You are using the GitHub Actions path** — `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` are set as repository secrets, and pushing to the
+feature branch runs tests then deploys.
+
+The section below is the alternative: Cloudflare can pull from GitHub directly,
+with no GitHub secrets at all. **Don't set both up** — two deploy mechanisms on
+the same push race each other.
 
 1. Cloudflare dashboard → **Workers & Pages** → **Create application**
 2. Next to **Import a repository**, choose **Get started**
