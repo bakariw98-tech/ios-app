@@ -22,5 +22,7 @@ database_id = "c533ed3b-93ac-4f3b-8802-ad5fd73dafb5"
 #   VAPI_API_KEY
 #   VAPI_WEBHOOK_SECRET
 #   VAPI_PHONE_NUMBER
-#   VAPI_PHONE_NUMBER_ID
 #   PUBLIC_SERVER_URL   (your workers.dev URL, no trailing slash)
+#
+# VAPI_PHONE_NUMBER_ID is optional — nothing currently reads it — so don't
+# spend time hunting for it in Vapi's dashboard.

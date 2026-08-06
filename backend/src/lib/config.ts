@@ -10,7 +10,15 @@ export interface Env {
   VAPI_API_KEY: string;
   VAPI_WEBHOOK_SECRET: string;
   VAPI_PHONE_NUMBER: string;
-  VAPI_PHONE_NUMBER_ID: string;
+  /**
+   * Optional. Nothing in this codebase currently reads it — no route, no
+   * assistant, no live-call control path — because we never call the Vapi API
+   * to look up or manage the number itself, only to speak into a call that's
+   * already in progress. Kept available for whenever that changes, but never
+   * make it required: the UUID is fiddly to locate in Vapi's dashboard and
+   * gating startup on an unused value is a needless deploy blocker.
+   */
+  VAPI_PHONE_NUMBER_ID?: string;
   PUBLIC_SERVER_URL: string;
   VAPI_BASE_URL?: string;
   DB: D1Database;
@@ -21,7 +29,7 @@ export interface Config {
     apiKey: string;
     webhookSecret: string;
     phoneNumber: string;
-    phoneNumberId: string;
+    phoneNumberId?: string;
     baseUrl: string;
   };
   serverUrl: string;
@@ -32,7 +40,6 @@ const REQUIRED = [
   'VAPI_API_KEY',
   'VAPI_WEBHOOK_SECRET',
   'VAPI_PHONE_NUMBER',
-  'VAPI_PHONE_NUMBER_ID',
   'PUBLIC_SERVER_URL',
 ] as const;
 
@@ -55,8 +62,16 @@ const REQUIRED = [
  * are not part of a valid secret.
  */
 function describeContamination(value: string): string | null {
-  if (value !== value.trim()) {
-    return 'has leading or trailing whitespace';
+  // Checked before the printable-ASCII filter below, because a bare space
+  // (U+0020) IS printable ASCII and would otherwise slide through it. Every
+  // value here — a key, a secret, a phone number, a URL — is meant to be one
+  // unbroken token, so any whitespace at all is a sign two things got pasted
+  // together, not a plain-ASCII value that merely contains a space.
+  if (/\s/.test(value)) {
+    return value !== value.trim()
+      ? 'has leading or trailing whitespace'
+      : 'contains embedded whitespace — expected a single unbroken token, ' +
+          'so a space usually means two values got pasted together';
   }
 
   const bad = [...value].filter((ch) => {
@@ -90,10 +105,19 @@ export function buildConfig(env: Env): Config {
     );
   }
 
-  const contaminated = REQUIRED.map((name) => {
-    const problem = describeContamination(env[name]);
-    return problem ? `${name} ${problem}` : null;
-  }).filter((entry): entry is string => entry !== null);
+  // Checked whether required or not: an optional value that IS set should
+  // still be caught if it's mangled, since it'll be silently wrong later
+  // rather than loudly wrong now.
+  const toCheck = env.VAPI_PHONE_NUMBER_ID
+    ? [...REQUIRED, 'VAPI_PHONE_NUMBER_ID' as const]
+    : REQUIRED;
+
+  const contaminated = toCheck
+    .map((name) => {
+      const problem = describeContamination(env[name]!);
+      return problem ? `${name} ${problem}` : null;
+    })
+    .filter((entry): entry is string => entry !== null);
 
   if (contaminated.length > 0) {
     throw new Error(`Malformed secret(s): ${contaminated.join('; ')}`);
@@ -106,7 +130,9 @@ export function buildConfig(env: Env): Config {
       apiKey: env.VAPI_API_KEY,
       webhookSecret: env.VAPI_WEBHOOK_SECRET,
       phoneNumber: env.VAPI_PHONE_NUMBER,
-      phoneNumberId: env.VAPI_PHONE_NUMBER_ID,
+      ...(env.VAPI_PHONE_NUMBER_ID && {
+        phoneNumberId: env.VAPI_PHONE_NUMBER_ID,
+      }),
       baseUrl: env.VAPI_BASE_URL ?? 'https://api.vapi.ai',
     },
     serverUrl,

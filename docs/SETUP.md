@@ -103,9 +103,12 @@ Variables and Secrets**. Add each as a **Secret** (not a plaintext variable):
 | --- | --- |
 | `VAPI_API_KEY` | private key from step 3 |
 | `VAPI_PHONE_NUMBER` | `+15551234567` |
-| `VAPI_PHONE_NUMBER_ID` | the UUID |
 | `VAPI_WEBHOOK_SECRET` | **you invent this** — any long random string |
 | `PUBLIC_SERVER_URL` | your Worker URL, e.g. `https://conversation-delegation.<subdomain>.workers.dev` — no trailing slash |
+
+Only these four. `VAPI_PHONE_NUMBER_ID` (the number's UUID, shown top-right on
+its Vapi page) is optional — nothing in the code reads it yet — so don't spend
+time hunting for it.
 
 The Worker must exist before you can set these, so **let step 2 deploy once
 first**, then add the secrets, then re-run the workflow (Actions → the latest
