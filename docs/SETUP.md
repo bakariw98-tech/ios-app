@@ -32,10 +32,20 @@ non-ASCII characters) — the `/health` response won't say which, but any
 request to `/realtime/session` will, in its `detail` field, the same pattern
 used for the Vapi secrets below.
 
+Faster than reading `/health`'s boolean: open `<worker-url>/web` in a
+browser. It's a full test client for this mode served straight off the
+Worker — type a brief, confirm the AI actually starts talking. A scripted
+version of the non-audio parts of that same check lives in `e2e/`, see
+`e2e/README.md` (it costs real OpenAI usage, so it's not part of `npm test`
+or the deploy pipeline).
+
 The iOS side needs a WebRTC package added in Xcode before it will even
 compile — see `ios/README.md`. That, and real-device testing of echo
 cancellation on speakerphone, are the two things actually worth spending time
-on for this mode; nothing below this point is relevant to it.
+on for this mode; nothing below this point is relevant to it. Checking
+`/web` first (above) is worth doing before either — it isolates "does the
+backend + OpenAI Realtime integration work at all" from the iOS-specific
+unknowns.
 
 ---
 

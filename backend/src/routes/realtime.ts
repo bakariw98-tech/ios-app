@@ -9,7 +9,12 @@
 import type { Hono } from 'hono';
 
 import type { AppBindings } from '../app.js';
-import { BriefSchema, buildInPersonInstructions } from '../domain/inPersonBrief.js';
+import {
+  BriefSchema,
+  CORRECTION_MARKER_PREFIX,
+  CORRECTION_MARKER_SUFFIX,
+  buildInPersonInstructions,
+} from '../domain/inPersonBrief.js';
 import { mintEphemeralSession } from '../lib/openaiRealtime.js';
 
 const VOICES = ['marin', 'cedar'] as const;
@@ -60,6 +65,18 @@ export function registerRealtimeRoutes(app: Hono<AppBindings>): void {
         expiresAt: session.expiresAt,
         model: session.model,
         voice: session.voice,
+        // Sent so every client reads the correction-marker format at runtime
+        // instead of hardcoding a third copy of it. It's already duplicated
+        // once by necessity (inPersonBrief.ts's prompt vs.
+        // RealtimeSessionClient.swift's Swift literal, kept in sync by
+        // convention since one side is TypeScript and the other Swift) — a
+        // browser client hardcoding a third copy would make it a 3-way drift
+        // risk instead of a 2-way one. See docs/technical-decisions.md,
+        // ADR-005.
+        correctionMarker: {
+          prefix: CORRECTION_MARKER_PREFIX,
+          suffix: CORRECTION_MARKER_SUFFIX,
+        },
       });
     } catch (error) {
       // Never surface OPENAI_API_KEY or any part of it in the response —

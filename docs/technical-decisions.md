@@ -481,6 +481,82 @@ being pointed at a higher-stakes interaction. No equivalent screening exists
 for this mode yet. Not built here — scope note only, so it isn't silently
 assumed handled.
 
+### Amendment — a browser test client, to verify before the iOS build exists
+
+Added when the user asked how to test in-person mode without first shipping
+an iOS build through Xcode and the App Store — a real problem, since the
+iOS client needs a third-party WebRTC package (`stasel/WebRTC`, Apple ships
+no first-party one) that had never been added or compiled in this project.
+
+This turned out to be the right move independent of convenience: browser
+WebRTC to OpenAI's Realtime API is the *first-class*, best-documented client
+path — every browser ships WebRTC natively, whereas iOS needs an added
+dependency precisely because Apple doesn't. A web client needs zero new
+runtime dependencies and can be served from the Worker that's already live.
+More importantly, it's the first thing in this project to exercise the real
+mint → WebRTC → live-audio path at all — every backend test up to this point
+fakes the OpenAI call at the `fetch` boundary.
+
+**What it is:** `GET /web` (`backend/src/routes/web.ts`), a single Hono
+route returning a self-contained HTML page (inline CSS + `<script
+type="module">`, no build step, no framework) rather than a Workers Static
+Assets binding — there was no prior art for that in this repo (no
+`[assets]`/`[site]` block, no frontend build tooling anywhere), so an inline
+route matching the existing `app.get('/health', ...)` shape was the smaller
+addition. It implements the *identical* protocol
+`RealtimeSessionClient.swift` does: no ICE servers (OpenAI's endpoint is a
+direct SDP exchange, not third-party NAT traversal), data channel
+`"oai-events"` created before the offer so it lands in the SDP, `POST
+https://api.openai.com/v1/realtime/calls` with the ephemeral client secret,
+the same Stop (`response.cancel`) and typed-correction
+(`conversation.item.create` + `response.create`) controls as `BriefView`.
+`/web` and `/realtime/session` are both unauthenticated today — anyone with
+the URL can mint sessions against the account's OpenAI billing. That's
+already true of hitting `/realtime/session` directly; the HTML wrapper
+doesn't add a new privilege, but it's worth knowing before treating this as
+more than an internal tool.
+
+**Closing a drift risk this exposed:** the correction marker
+(`[TYPED CORRECTION FROM <name> — NOT SPOKEN BY THE OTHER PERSON]: <text>`)
+was, before this, duplicated by convention only — a source-of-truth pair of
+constants in `domain/inPersonBrief.ts`, and a hardcoded copy in
+`RealtimeSessionClient.swift`. A third hardcoded copy in the browser client
+would have made drift a when-not-if. Fixed by adding
+`correctionMarker: { prefix, suffix }` to `/realtime/session`'s response
+body, sourced directly from the existing constants — non-breaking, since
+Swift's `Decodable` on a struct without that field just ignores it. The
+browser client reads the marker from the API response instead of hardcoding
+it, so it structurally cannot drift; `backend/test/web.test.ts` asserts the
+served page never contains the literal marker strings, specifically to keep
+this property from regressing. (iOS could later be switched to the same
+pattern — a natural follow-up, not done in this pass, since the task wasn't
+to touch the iOS contract.)
+
+**Verification, and its honest limits:** a Playwright script
+(`e2e/run.mjs`, see `e2e/README.md`) drives this page in headless Chromium
+with fake media devices against the live Worker and real OpenAI, and reports
+six checkpoints individually rather than one pass/fail boolean. This
+project's own sandbox was empirically confirmed, while planning this, to
+have working HTTPS egress but no outbound UDP (a STUN request and an NTP
+query both timed out; the equivalent HTTPS call didn't). WebRTC's actual
+media and the `oai-events` data channel ride on UDP, so from an environment
+like that, only the mint-session and SDP-offer/answer HTTPS legs are
+provable — ICE connecting, the data channel opening, and real audio are not.
+That split is real and is reported as such, not glossed over: a clean run
+here proves the backend contract; it doesn't prove the live conversation
+works. Only a human opening `/web` on their own device and network — hearing
+the AI talk, tapping Stop mid-sentence, sending a correction — proves that.
+This is the same fundamental limit phone mode already had (a human on a real
+call was always the actual test); this just makes explicit which parts a
+script can and can't stand in for.
+
+**Recommendation:** keep `/web` as an internal engineering tool (it's cheap
+— one route, one HTML string, one test file), not a second marketed product
+surface. Its job is narrowing what's still unproven before the iOS build: a
+clean pass here isolates "does OpenAI Realtime + WebRTC work at all" from
+"does `stasel/WebRTC`'s specific Swift API integrate correctly" — only the
+latter is still open afterward.
+
 [rtwebrtc]: https://developers.openai.com/api/docs/guides/realtime-webrtc
 
 ---

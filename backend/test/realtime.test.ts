@@ -70,11 +70,30 @@ describe('POST /realtime/session', () => {
       expiresAt: string;
       model: string;
       voice: string;
+      correctionMarker: { prefix: string; suffix: string };
     };
     expect(body.clientSecret).toBe(CLIENT_SECRET);
     expect(body.clientSecret).not.toContain(OPENAI_KEY);
     expect(body.voice).toBe('cedar'); // default
     expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  // Every client (iOS today, the browser test client next) needs the exact
+  // correction-marker format to recognise a typed correction as
+  // authoritative rather than something the other person said. Sourcing it
+  // from this response instead of a client-side hardcoded copy is what keeps
+  // a third client from becoming a third place the string can drift out of
+  // sync with domain/inPersonBrief.ts, which is what the model is actually
+  // taught to recognise.
+  it('includes the correction marker so clients never hardcode it', async () => {
+    const response = await post({ situation: 'Order a coffee.' });
+    const body = (await response.json()) as {
+      correctionMarker: { prefix: string; suffix: string };
+    };
+    expect(body.correctionMarker).toEqual({
+      prefix: 'TYPED CORRECTION FROM',
+      suffix: 'NOT SPOKEN BY THE OTHER PERSON',
+    });
   });
 
   it('authenticates to OpenAI with the real key, server-side only', async () => {

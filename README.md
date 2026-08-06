@@ -30,6 +30,7 @@ more detail, and what carries over.
 | [`docs/SETUP.md`](docs/SETUP.md) | Where the Cloudflare/Vapi keys go. Predates the pivot — `OPENAI_API_KEY` (below) isn't in it yet. |
 | [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md) | Phone-mode scope and locked decisions. Status note at the top points here. |
 | [`docs/compliance.md`](docs/compliance.md) | Phone-mode-only. Doesn't apply to in-person mode — see the note at its top. |
+| [`e2e/README.md`](e2e/README.md) | Real end-to-end check of in-person mode's WebRTC mechanism against live OpenAI, via the browser client below. Costs real usage — not part of CI. |
 
 **Before changing phone mode's call flow, read `docs/compliance.md`.** The
 AI's self-introduction there is not a UX string — it's the mechanism that
@@ -52,7 +53,7 @@ Cloudflare Worker backed by D1, deployed by GitHub Actions on push — see
 ```bash
 cd backend
 npm ci
-npm test                  # 115 tests
+npm test                  # 125 tests
 npm run typecheck
 npx wrangler dev          # optional, local only
 ```
@@ -70,6 +71,14 @@ access. Set it the same way as the Vapi secrets (Cloudflare dashboard →
 Workers & Pages → conversation-delegation → Settings → Variables and Secrets).
 Nothing else to configure — there's no dashboard-side setup analogous to
 Vapi's server URL, because the app talks to OpenAI directly.
+
+**Verify it works at `<worker-url>/web` before building the iOS app.** It's
+a browser client implementing the exact same WebRTC protocol as the Swift
+client, served straight off this Worker — the fastest way to confirm the
+actual mint → WebRTC → live-audio path works before sinking time into an
+Xcode project. See [`e2e/README.md`](e2e/README.md) for a scripted check of
+the parts that don't need a human in the room; the rest (hearing it talk,
+tapping Stop mid-sentence, sending a correction) still needs you.
 
 ### Phone mode
 

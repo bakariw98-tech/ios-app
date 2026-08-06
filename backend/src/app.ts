@@ -4,6 +4,7 @@ import { type Config, type Env, buildConfig } from './lib/config.js';
 import { D1Store, type Store } from './lib/store.js';
 import { registerRealtimeRoutes } from './routes/realtime.js';
 import { registerSessionRoutes } from './routes/session.js';
+import { registerWebRoutes } from './routes/web.js';
 import { registerWebhookRoutes } from './routes/webhook.js';
 
 export interface AppBindings {
@@ -48,6 +49,7 @@ export function buildApp(options: AppOptions = {}) {
   registerWebhookRoutes(app);
   registerSessionRoutes(app);
   registerRealtimeRoutes(app);
+  registerWebRoutes(app);
 
   // Reports which mode(s) are actually usable, not just that the process is
   // alive — there's no log-tailing tool in this deployment's toolset, so this

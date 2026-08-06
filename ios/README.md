@@ -23,6 +23,17 @@ Views/TranscriptView.swift           Live transcript ("chat box").
 Views/SummaryView.swift              Post-call summary.
 ```
 
+## Check the mechanism works before building this
+
+Before adding the WebRTC package below and sinking time into an Xcode
+project, verify the underlying mint → WebRTC → live-audio path works at all:
+open `<worker-url>/web` in a real browser (or run `e2e/run.mjs`, see
+`e2e/README.md`). It's a browser client implementing this exact same
+protocol against the same backend. A clean pass there isolates "does OpenAI
+Realtime + WebRTC work" from "does `stasel/WebRTC`'s specific Swift API
+integrate correctly" — leaving only the latter still open once this iOS
+client is built.
+
 ## Required dependency: WebRTC
 
 In-person mode needs a WebRTC package Apple doesn't ship first-party. Add it in

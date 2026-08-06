@@ -1,0 +1,13 @@
+{
+  "name": "in-person-mode-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Real end-to-end check of in-person mode's WebRTC mechanism against a live Worker and real OpenAI. See README.md before running this — it costs real OpenAI usage.",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.48.0"
+  }
+}
