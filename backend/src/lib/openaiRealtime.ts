@@ -1,8 +1,11 @@
 /**
  * Mints ephemeral client secrets for OpenAI's Realtime API.
  *
- * Verified against https://developers.openai.com/api/docs/guides/realtime-webrtc
- * on 2026-08-06 — re-check before relying on this if OpenAI's Realtime API
+ * Session-object shape re-verified against
+ * https://developers.openai.com/api/docs/api-reference/realtime-sessions/create-realtime-client-secret
+ * on 2026-08-06: the nested `audio.input.format` / `audio.output` objects,
+ * `semantic_vad` turn detection, and session-level `output_modalities` below
+ * are all current. Re-check before relying on this if OpenAI's Realtime API
  * surface has moved.
  *
  * The flow: our backend holds the real `OPENAI_API_KEY` and calls this
@@ -14,7 +17,15 @@
  * itself recommends for client apps (mint server-side, connect client-side).
  */
 
-const REALTIME_MODEL = 'gpt-realtime-2025-08-28';
+/**
+ * Realtime model IDs go stale. `gpt-realtime-2025-08-28` was correct when this
+ * was written and had silently been retired by the time the first real request
+ * was made against it — OpenAI rejects the whole session, which surfaces as a
+ * generic failure a long way from the cause. Verify this against
+ * https://developers.openai.com/api/docs/models before assuming a session
+ * failure is anything more interesting than this constant being out of date.
+ */
+const REALTIME_MODEL = 'gpt-realtime-2.1';
 
 export interface RealtimeVoiceConfig {
   model?: string;
@@ -78,8 +89,12 @@ export async function mintEphemeralSession(
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
+    // The caller surfaces this message to clients (see routes/realtime.ts), so
+    // redact rather than trust that OpenAI never echoes the credential back.
+    // Structural guarantee, not an assumption about someone else's error text.
+    const safeBody = apiKey ? body.split(apiKey).join('[redacted]') : body;
     throw new Error(
-      `OpenAI Realtime session creation failed: ${response.status} ${body}`,
+      `OpenAI Realtime session creation failed: ${response.status} ${safeBody}`,
     );
   }
 

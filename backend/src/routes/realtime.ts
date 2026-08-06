@@ -79,11 +79,22 @@ export function registerRealtimeRoutes(app: Hono<AppBindings>): void {
         },
       });
     } catch (error) {
-      // Never surface OPENAI_API_KEY or any part of it in the response —
-      // only the fact that minting failed and OpenAI's own status text,
-      // which openaiRealtime.ts already scrubbed of the Authorization header.
       console.error('Failed to mint OpenAI Realtime session:', error);
-      return c.json({ error: 'could not start a realtime session' }, 502);
+
+      // `detail` carries OpenAI's own status and message. Same reasoning as
+      // the config-error detail in app.ts: there's no log-tailing tool in
+      // this deployment's toolset, so a bare "could not start a realtime
+      // session" costs a full debug cycle to turn into a cause — which is
+      // exactly what a retired model ID cost once already (see the note on
+      // REALTIME_MODEL in lib/openaiRealtime.ts). The message is OpenAI's
+      // rejection text, never the request: the key only ever travels in the
+      // Authorization header, which is not part of the thrown message, and
+      // test/realtime.test.ts asserts the key never appears in a response.
+      const detail = error instanceof Error ? error.message : String(error);
+      return c.json(
+        { error: 'could not start a realtime session', detail },
+        502,
+      );
     }
   });
 }

@@ -49,8 +49,8 @@ TARGET_URL=http://localhost:8787/web npm test
 Other env vars:
 
 - `CHROMIUM_PATH` — override the Chromium binary (defaults to the
-  pre-installed sandbox Chromium at
-  `/opt/pw-browsers/chromium/chrome-linux/chrome`; on a normal machine with
+  pre-installed sandbox Chromium at `/opt/pw-browsers/chromium`, which is a
+  symlink to the binary itself, not a directory; on a normal machine with
   Playwright's browsers installed via `npx playwright install chromium`,
   point this at that binary instead).
 - `VERBOSE=1` — echo the page's own `console.log` output as it runs, useful

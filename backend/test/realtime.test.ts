@@ -182,4 +182,48 @@ describe('POST /realtime/session', () => {
     const text = await response.text();
     expect(text).not.toContain(OPENAI_KEY);
   });
+
+  // Regression test for a real debug cycle: a retired model ID made every
+  // session fail, and the response said only "could not start a realtime
+  // session" — with no log-tailing tool available, the cause took a
+  // docs-diffing detour to find. OpenAI's own rejection text has to reach the
+  // caller or that repeats every time this breaks.
+  it('surfaces OpenAI\'s own rejection text so failures are diagnosable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: { message: "The model 'gone-model' does not exist" } }),
+            { status: 400 },
+          ),
+      ),
+    );
+
+    const response = await post({ situation: 'Order a coffee.' });
+    expect(response.status).toBe(502);
+
+    const body = (await response.json()) as { detail: string };
+    expect(body.detail).toContain('400');
+    expect(body.detail).toContain('does not exist');
+  });
+
+  // The detail field above carries OpenAI's response body verbatim, so the
+  // no-leak guarantee can't rest on "OpenAI would never echo the key back."
+  it('redacts the API key from the detail even if OpenAI echoes it back', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(`invalid key: ${OPENAI_KEY}`, { status: 401 }),
+      ),
+    );
+
+    const response = await post({ situation: 'Order a coffee.' });
+    expect(response.status).toBe(502);
+
+    const text = await response.text();
+    expect(text).not.toContain(OPENAI_KEY);
+    expect(text).toContain('[redacted]');
+  });
 });

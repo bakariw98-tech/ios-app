@@ -24,8 +24,9 @@ const TARGET_URL =
   process.env.TARGET_URL ??
   'https://conversation-delegation.bakariw98.workers.dev/web';
 
-const CHROMIUM_PATH =
-  process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium/chrome-linux/chrome';
+// Note this is the binary itself, not a directory — /opt/pw-browsers/chromium
+// is a symlink straight to chromium-<build>/chrome-linux/chrome.
+const CHROMIUM_PATH = process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium';
 
 const results = [];
 

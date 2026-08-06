@@ -25,7 +25,15 @@ export const REALTIME_VOICES = [
 export const PREFERRED_VOICES = ['marin', 'cedar'] as const;
 export type PreferredVoice = (typeof PREFERRED_VOICES)[number];
 
-export const REALTIME_MODEL = 'gpt-realtime-2025-08-28';
+/**
+ * Was `gpt-realtime-2025-08-28`, which OpenAI has since retired. Worth knowing
+ * if phone mode is picked back up: its open bug is a call that connects,
+ * authenticates, then ends instantly with no transcript — exactly what a
+ * rejected model ID looks like from Vapi's side, since Vapi passes this
+ * straight through to OpenAI and the session never opens. Check this before
+ * re-debugging webhooks or secrets. See README.md.
+ */
+export const REALTIME_MODEL = 'gpt-realtime-2.1';
 
 /**
  * Interview uses cedar (warmer, better for drawing someone out); the delegate
