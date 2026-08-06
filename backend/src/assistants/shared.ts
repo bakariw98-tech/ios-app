@@ -26,14 +26,33 @@ export const PREFERRED_VOICES = ['marin', 'cedar'] as const;
 export type PreferredVoice = (typeof PREFERRED_VOICES)[number];
 
 /**
- * Was `gpt-realtime-2025-08-28`, which OpenAI has since retired. Worth knowing
- * if phone mode is picked back up: its open bug is a call that connects,
- * authenticates, then ends instantly with no transcript — exactly what a
- * rejected model ID looks like from Vapi's side, since Vapi passes this
- * straight through to OpenAI and the session never opens. Check this before
- * re-debugging webhooks or secrets. See README.md.
+ * NOT the same string as `lib/openaiRealtime.ts`'s `REALTIME_MODEL`, and
+ * that's deliberate, not an oversight — do not "fix" them into matching.
+ *
+ * `openaiRealtime.ts` calls OpenAI's Realtime API directly (in-person mode);
+ * this file goes through Vapi (phone mode), which maintains its own
+ * compatibility layer rather than passing the model string straight through
+ * unchanged — an assumption a live debugging session on 2026-08-06 disproved
+ * directly. Vapi's own docs (https://docs.vapi.ai/openai-realtime, checked
+ * same day) still list `gpt-realtime-2025-08-28` as their production model
+ * and do not list `gpt-realtime-2.1` at all — OpenAI retiring the old ID on
+ * their own direct API does not mean Vapi has adopted the new one yet. This
+ * constant briefly got "fixed" to `gpt-realtime-2.1` to match
+ * `openaiRealtime.ts`, which broke real phone calls that same night: the
+ * call would connect, authenticate, and die instantly with no transcript —
+ * but NOT because of a rejected model ID the way that same symptom looked
+ * for in-person mode. Vapi appears to fail closed on an unrecognized model
+ * by silently substituting some default assistant behavior rather than
+ * erroring — a live call at this point greeted with a generic "I'm ChatGPT,
+ * how can I assist" instead of this file's actual interview prompt, with
+ * recording ON despite `ARTIFACT_PLAN.recordingEnabled: false` below, both
+ * of which cannot come from this codebase's own config. That's the
+ * fingerprint to check for if this regresses: a real, distinct assistant
+ * persona replacing this one is Vapi's fallback, not a webhook or secrets
+ * problem. Re-verify against Vapi's docs specifically — not OpenAI's —
+ * before ever changing this value again.
  */
-export const REALTIME_MODEL = 'gpt-realtime-2.1';
+export const REALTIME_MODEL = 'gpt-realtime-2025-08-28';
 
 /**
  * Interview uses cedar (warmer, better for drawing someone out); the delegate
