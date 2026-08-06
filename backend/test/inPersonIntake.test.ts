@@ -182,6 +182,26 @@ describe('buildIntakeInstructions', () => {
     const instructions = buildIntakeInstructions({});
     expect(instructions).toMatch(/state the goal plainly, not just the surface request/i);
   });
+
+  // Regression test for a real bad question a live run produced: "which
+  // Papa John's are you calling?" — a location detail that changes nothing
+  // about what gets said out loud. The earlier "who they're speaking to and
+  // where" phrasing invited exactly this; this locks in the fix so it can't
+  // come back the same way.
+  it('forbids asking about location, address, or which specific branch', () => {
+    const instructions = buildIntakeInstructions({});
+    expect(instructions).toMatch(
+      /never ask about administrative or identifying details that don't change/i,
+    );
+    expect(instructions).toMatch(/which specific branch or location/i);
+    expect(instructions).toMatch(/doesn't need to know which store this is/i);
+  });
+
+  it('frames the model as the person about to speak, not a form-filler', () => {
+    const instructions = buildIntakeInstructions({});
+    expect(instructions).toMatch(/you're the one about to open your\s+mouth and speak for them/i);
+    expect(instructions).toMatch(/not what would look thorough on a form/i);
+  });
 });
 
 describe('buildIntakeMessages', () => {
