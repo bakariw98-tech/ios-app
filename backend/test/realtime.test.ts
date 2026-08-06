@@ -120,6 +120,13 @@ describe('POST /realtime/session', () => {
       true,
     );
     expect(sent.session.audio.output.voice).toBe('cedar');
+    // A real request to OpenAI 400'd on exactly this being missing —
+    // asserting only input.format (above) let it through, since input and
+    // output are separate objects with independently required fields.
+    expect(sent.session.audio.output.format).toEqual({
+      type: 'audio/pcm',
+      rate: 24000,
+    });
   });
 
   it('embeds the brief into the instructions sent to OpenAI', async () => {

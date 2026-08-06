@@ -79,7 +79,12 @@ export async function mintEphemeralSession(
             },
           },
           output: {
-            format: { type: 'audio/pcm' },
+            // `rate` is required on this format object too, not just input's
+            // — omitting it 400s with "Missing required parameter:
+            // session.audio.output.format.rate", caught by the first real
+            // request ever made against this endpoint. Same 24kHz PCM16 the
+            // input side uses.
+            format: { type: 'audio/pcm', rate: 24000 },
             voice: config.voice,
           },
         },

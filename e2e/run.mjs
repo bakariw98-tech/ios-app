@@ -40,12 +40,31 @@ async function main() {
   console.log(`Target: ${TARGET_URL}`);
   console.log(`Chromium: ${CHROMIUM_PATH}\n`);
 
+  // Chromium doesn't read HTTPS_PROXY itself — only tools built on Node's
+  // fetch/http stack do. Pass it through explicitly wherever a proxy is
+  // configured for this shell (e.g. this sandbox's agent proxy), or Chromium
+  // tries a direct connection and gets a connection reset instead of an
+  // informative proxy error. Harmless to omit on a normal machine with no
+  // proxy set.
+  const proxyServer = process.env.HTTPS_PROXY ?? process.env.https_proxy;
+
   const browser = await chromium.launch({
     executablePath: CHROMIUM_PATH,
     args: [
       '--use-fake-device-for-media-stream',
       '--use-fake-ui-for-media-stream',
+      ...(proxyServer
+        ? [
+            `--proxy-server=${proxyServer}`,
+            // So a proxied environment doesn't break local-target runs (e.g.
+            // TARGET_URL=http://localhost:8787/web against wrangler dev).
+            '--proxy-bypass-list=localhost;127.0.0.1;<local>',
+          ]
+        : []),
     ],
+    ...(proxyServer
+      ? { proxy: { server: proxyServer, bypass: 'localhost,127.0.0.1' } }
+      : {}),
   });
 
   const context = await browser.newContext({
