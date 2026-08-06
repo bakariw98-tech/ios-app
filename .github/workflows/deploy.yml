@@ -86,11 +86,19 @@ jobs:
             exit 1
           fi
 
-          if printf '%s' "$CLOUDFLARE_API_TOKEN" | LC_ALL=C grep -qv '^[A-Za-z0-9_-]*$'; then
+          # Everything outside [A-Za-z0-9_-] cannot be part of a real token, so
+          # printing just those characters identifies the mistake without
+          # revealing any token material.
+          contamination=$(printf '%s' "$CLOUDFLARE_API_TOKEN" | LC_ALL=C tr -d 'A-Za-z0-9_-')
+          if [ -n "$contamination" ]; then
             echo "::error::CLOUDFLARE_API_TOKEN contains characters that aren't valid in a Cloudflare API token."
             echo "::error::Expected exactly 40 characters of A-Z, a-z, 0-9, underscore or hyphen."
-            echo "::error::Usual causes: quotes pasted around the value, a stray space, or"
-            echo "::error::copying the whole 'Authorization: Bearer <token>' line instead of just the token."
+            echo "::error::The offending characters are shown between the arrows below."
+            echo "::error::(These cannot be part of a real token, so nothing secret is revealed.)"
+            printf '::error::>>>%s<<<\n' "$(printf '%s' "$contamination" | LC_ALL=C sed -n l | tr -d '\n')"
+            echo "::error::If you see a colon and spaces, you copied the 'Authorization: Bearer <token>' line."
+            echo "::error::If you see quotes, the quotes were pasted along with the value."
+            echo "::error::Paste ONLY the token itself — use Cloudflare's Copy button on the token screen."
             exit 1
           fi
 
