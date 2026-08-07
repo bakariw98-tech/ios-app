@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Real end-to-end check of in-person mode's WebRTC mechanism against a live Worker and real OpenAI. See README.md before running this — it costs real OpenAI usage.",
   "scripts": {
-    "test": "node run.mjs"
+    "test": "node run.mjs",
+    "test:twilio": "node twilio-relay.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.48.0"

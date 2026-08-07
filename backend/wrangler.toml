@@ -15,6 +15,17 @@ binding = "DB"
 database_name = "conversation-delegation"
 database_id = "c533ed3b-93ac-4f3b-8802-ad5fd73dafb5"
 
+# CallRelay (src/relay/CallRelay.ts) — the Twilio migration's Durable Object,
+# one instance per live call, bridging a Twilio Media Stream WebSocket to an
+# OpenAI Realtime WebSocket. See docs/technical-decisions.md ADR-006.
+[[durable_objects.bindings]]
+name = "CALL_RELAY"
+class_name = "CallRelay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CallRelay"]
+
 # Secrets are NOT set here — they'd end up in git. Set them with
 # `wrangler secret put <NAME>` or in the Cloudflare dashboard under
 # Workers → conversation-delegation → Settings → Variables and Secrets:
@@ -22,7 +33,18 @@ database_id = "c533ed3b-93ac-4f3b-8802-ad5fd73dafb5"
 #   VAPI_API_KEY
 #   VAPI_WEBHOOK_SECRET
 #   VAPI_PHONE_NUMBER
-#   PUBLIC_SERVER_URL   (your workers.dev URL, no trailing slash)
+#   PUBLIC_SERVER_URL   (your workers.dev URL, no trailing slash — shared
+#                        with the Twilio secrets below)
 #
 # VAPI_PHONE_NUMBER_ID is optional — nothing currently reads it — so don't
 # spend time hunting for it in Vapi's dashboard.
+#
+# Twilio phone mode (new backend, ADR-006) — all four required together:
+#
+#   TWILIO_ACCOUNT_SID
+#   TWILIO_AUTH_TOKEN
+#   TWILIO_PHONE_NUMBER
+#   PUBLIC_SERVER_URL   (same value as above)
+#
+# Twilio phone mode also needs OPENAI_API_KEY set (see lib/config.ts) —
+# unlike Vapi, this backend talks to OpenAI directly.

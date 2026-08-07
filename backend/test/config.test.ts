@@ -27,7 +27,7 @@ const vapiOnly: Env = {
   VAPI_PHONE_NUMBER: '+15551234567',
   VAPI_PHONE_NUMBER_ID: '11111111-2222-3333-4444-555555555555',
   PUBLIC_SERVER_URL: 'https://example.workers.dev',
-  DB: {} as never,
+  DB: {} as never, CALL_RELAY: {} as never,
 };
 
 const twilioOnly: Env = {
@@ -35,17 +35,17 @@ const twilioOnly: Env = {
   TWILIO_AUTH_TOKEN: 'a-long-random-auth-token',
   TWILIO_PHONE_NUMBER: '+15559876543',
   PUBLIC_SERVER_URL: 'https://example.workers.dev',
-  DB: {} as never,
+  DB: {} as never, CALL_RELAY: {} as never,
 };
 
 const openaiOnly: Env = {
   OPENAI_API_KEY: 'sk-test-abc123',
-  DB: {} as never,
+  DB: {} as never, CALL_RELAY: {} as never,
 };
 
 describe('mode decoupling', () => {
   it('boots with neither mode configured', () => {
-    const config = buildConfig({ DB: {} as never });
+    const config = buildConfig({ DB: {} as never, CALL_RELAY: {} as never });
     expect(config.vapi).toBeUndefined();
     expect(config.openai).toBeUndefined();
   });

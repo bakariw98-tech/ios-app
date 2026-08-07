@@ -111,6 +111,33 @@ function secretsMatch(provided: string, expected: string): boolean {
   return difference === 0;
 }
 
+/**
+ * Mint a short-lived per-call path token binding a Media Stream WebSocket
+ * connection to one specific CallSid.
+ *
+ * `<Stream url>` can't carry query parameters, so the token has to live in a
+ * path segment (`/twilio/stream/:callSid/:token`) — and the static
+ * `X-Twilio-Signature` header on the WS upgrade alone can't do this binding:
+ * it proves the request came from Twilio, but not that it's for *this*
+ * call specifically. This reuses the same HMAC-SHA1-over-Auth-Token
+ * machinery as verifyTwilioSignature, with a distinct `stream:` prefix so a
+ * minted token can never collide with an actual Twilio request signature for
+ * the same Auth Token, even in principle.
+ */
+export async function signStreamToken(authToken: string, callSid: string): Promise<string> {
+  return computeTwilioSignature(authToken, `stream:${callSid}`, {});
+}
+
+/** Verify a token minted by signStreamToken, constant-time. */
+export async function verifyStreamToken(
+  authToken: string,
+  callSid: string,
+  providedToken: string,
+): Promise<boolean> {
+  const expected = await signStreamToken(authToken, callSid);
+  return secretsMatch(expected, providedToken);
+}
+
 /** Escape text for safe embedding inside XML element content or an attribute value. */
 export function escapeXml(text: string): string {
   return text

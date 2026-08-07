@@ -8,6 +8,7 @@
 
 import { buildApp } from './app.js';
 import type { Env } from './lib/config.js';
+import { CallRelay } from './relay/CallRelay.js';
 
 const app = buildApp();
 
@@ -16,3 +17,7 @@ export default {
     return app.fetch(request, env, ctx);
   },
 };
+
+// Durable Object classes must be exported from the main module for
+// wrangler.toml's [[durable_objects.bindings]] to find them.
+export { CallRelay };

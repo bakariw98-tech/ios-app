@@ -25,12 +25,12 @@ const vapiEnv: Env = {
   VAPI_WEBHOOK_SECRET: 'a-long-random-secret',
   VAPI_PHONE_NUMBER: '+15551234567',
   PUBLIC_SERVER_URL: 'https://example.workers.dev',
-  DB: {} as never,
+  DB: {} as never, CALL_RELAY: {} as never,
 };
 
 const openaiEnv: Env = {
   OPENAI_API_KEY: 'sk-test-abc123',
-  DB: {} as never,
+  DB: {} as never, CALL_RELAY: {} as never,
 };
 
 function request(app: Hono<AppBindings>, env: Env, path = '/health') {
@@ -40,7 +40,7 @@ function request(app: Hono<AppBindings>, env: Env, path = '/health') {
 describe('boots regardless of which mode is configured', () => {
   it('serves /health with neither mode configured', async () => {
     const app = buildApp();
-    const response = await request(app, { DB: {} as never });
+    const response = await request(app, { DB: {} as never, CALL_RELAY: {} as never });
     expect(response.status).toBe(200);
   });
 
@@ -81,14 +81,14 @@ describe('phone-mode routes refuse cleanly when Vapi is not configured', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ message: { type: 'status-update' } }),
       },
-      { DB: {} as never },
+      { DB: {} as never, CALL_RELAY: {} as never },
     );
     expect(response.status).toBe(503);
   });
 
   it('/session/start answers 503, not a 500 crash', async () => {
     const app = buildApp();
-    const response = await request(app, { DB: {} as never }, '/session/start');
+    const response = await request(app, { DB: {} as never, CALL_RELAY: {} as never }, '/session/start');
     expect(response.status).toBe(503);
   });
 });

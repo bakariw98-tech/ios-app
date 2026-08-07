@@ -148,3 +148,55 @@ device/network, hearing the AI talk, tapping Stop mid-sentence and
 confirming it's instant, and typing a correction and confirming it's
 followed. This script exists to catch backend/contract regressions cheaply
 and often; it is not a substitute for that manual pass before shipping.
+
+# Phone mode (Twilio migration): relay end-to-end check
+
+`twilio-relay.mjs` is the equivalent script for the Twilio Media Streams
+relay (`CallRelay`, see `docs/technical-decisions.md` ADR-006) — a plain
+Node script using the built-in `WebSocket` client (stable since Node 22), no
+browser involved, so none of the Chromium TLS/UDP issues above apply here.
+
+## Prerequisites
+
+1. `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`, and
+   `PUBLIC_SERVER_URL` must be set as secrets on the deployed Worker, and
+   `OPENAI_API_KEY` must already be set (Twilio phone mode depends on both —
+   see `lib/config.ts`'s file-level doc comment).
+2. `GET <worker-url>/health` must show `"modes": {"phoneTwilio": true, ...}`.
+3. Buy a Twilio phone number and point its **Voice** webhook at
+   `<worker-url>/twilio/voice` (`HTTP POST`) — this script never touches
+   Twilio's API to do that for you; it only simulates what Twilio's own
+   infrastructure would send.
+
+## Running it
+
+```sh
+cd e2e
+TWILIO_ACCOUNT_SID=ACxxxxxxxx TWILIO_AUTH_TOKEN=your-auth-token npm run test:twilio
+```
+
+(or `node twilio-relay.mjs` directly — see `package.json`). Both env vars
+must match exactly what's configured as secrets on the Worker; this script
+uses them only to compute the same request signature a real Twilio webhook
+would send, never to call Twilio's own API.
+
+## What it checks, and what it deliberately doesn't
+
+Checkpoints A–C exercise `POST /twilio/voice`: secrets present, a
+correctly-signed request returns 200, and the response TwiML points at a
+live stream URL rather than a `<Reject>` (bad signature) or `<Hangup>`
+(Twilio/OpenAI not configured — reported as a SKIP, not a FAIL, since that's
+an expected state before setup is finished, not a bug). Checkpoints D–E open
+that stream URL as a fake Twilio Media Streams client, send a synthetic
+`start` event, and confirm real audio comes back — the `CallRelay` DO speaks
+first (see its doc comment), so this works without needing to send real
+human speech as input.
+
+**What this cannot prove, and does not try to:** that a real PSTN call
+sounds intelligible end to end, that Twilio's actual infrastructure frames
+audio identically to this script's synthetic frames, or that a real phone's
+mixed audio reliably triggers the same VAD/barge-in behavior a clean
+synthetic stream does. Per the Twilio migration plan's own Phase 2
+verification step: run this script first to narrow down where a problem is,
+then place an actual phone call — this script is a fast, cheap first check,
+not a replacement for that call.

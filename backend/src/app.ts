@@ -5,6 +5,7 @@ import { D1Store, type Store } from './lib/store.js';
 import { registerIntakeRoutes } from './routes/intake.js';
 import { registerRealtimeRoutes } from './routes/realtime.js';
 import { registerSessionRoutes } from './routes/session.js';
+import { registerTwilioRoutes } from './routes/twilio.js';
 import { registerWebRoutes } from './routes/web.js';
 import { registerWebhookRoutes } from './routes/webhook.js';
 
@@ -51,6 +52,7 @@ export function buildApp(options: AppOptions = {}) {
   registerSessionRoutes(app);
   registerRealtimeRoutes(app);
   registerIntakeRoutes(app);
+  registerTwilioRoutes(app);
   registerWebRoutes(app);
 
   // Reports which mode(s) are actually usable, not just that the process is
@@ -61,7 +63,13 @@ export function buildApp(options: AppOptions = {}) {
     const config = c.get('config');
     return c.json({
       ok: true,
-      modes: { phone: Boolean(config.vapi), inPerson: Boolean(config.openai) },
+      modes: {
+        phone: Boolean(config.vapi),
+        // Twilio phone mode also needs openai — see lib/config.ts's
+        // file-level doc comment for why that dependency exists.
+        phoneTwilio: Boolean(config.twilio && config.openai),
+        inPerson: Boolean(config.openai),
+      },
     });
   });
 

@@ -16,6 +16,8 @@ import {
   computeTwilioSignature,
   endCall,
   escapeXml,
+  signStreamToken,
+  verifyStreamToken,
   verifyTwilioSignature,
 } from '../src/lib/twilio.js';
 
@@ -77,6 +79,32 @@ describe('computeTwilioSignature / verifyTwilioSignature', () => {
     };
     const signature = await computeTwilioSignature(authToken, url, reordered);
     expect(signature).toBe(expectedSignature);
+  });
+});
+
+describe('signStreamToken / verifyStreamToken', () => {
+  it('verifies a token minted for the same call and auth token', async () => {
+    const token = await signStreamToken('authtok', 'CA123');
+    expect(await verifyStreamToken('authtok', 'CA123', token)).toBe(true);
+  });
+
+  it('rejects a token minted for a different call', async () => {
+    const token = await signStreamToken('authtok', 'CA123');
+    expect(await verifyStreamToken('authtok', 'CA999', token)).toBe(false);
+  });
+
+  it('rejects a token minted under a different auth token', async () => {
+    const token = await signStreamToken('authtok', 'CA123');
+    expect(await verifyStreamToken('other-token', 'CA123', token)).toBe(false);
+  });
+
+  it('never collides with an ordinary Twilio request signature for the same auth token and callSid-shaped URL', async () => {
+    // Defense in depth: the `stream:` prefix means the signed string can
+    // never coincide with what verifyTwilioSignature would compute for any
+    // real request URL, even one that happens to be exactly "CA123".
+    const streamToken = await signStreamToken('authtok', 'CA123');
+    const requestSignature = await computeTwilioSignature('authtok', 'CA123', {});
+    expect(streamToken).not.toBe(requestSignature);
   });
 });
 

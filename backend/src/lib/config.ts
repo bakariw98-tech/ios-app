@@ -63,6 +63,17 @@ export interface Env {
   OPENAI_API_KEY?: string;
 
   DB: D1Database;
+
+  /**
+   * The CallRelay Durable Object namespace (src/relay/CallRelay.ts) —
+   * bridges one Twilio Media Stream WebSocket to one OpenAI Realtime
+   * WebSocket per call. Always present in the binding sense (declared in
+   * wrangler.toml unconditionally, unlike the optional secrets above), since
+   * Durable Object bindings aren't secrets and don't need the same
+   * present-or-absent gating. Only actually used once `config.twilio` is
+   * also set — see routes/twilio.ts.
+   */
+  CALL_RELAY: DurableObjectNamespace;
 }
 
 export interface VapiConfig {
