@@ -30,6 +30,14 @@ const vapiOnly: Env = {
   DB: {} as never,
 };
 
+const twilioOnly: Env = {
+  TWILIO_ACCOUNT_SID: 'ACabc123def456abc123def456abc1234',
+  TWILIO_AUTH_TOKEN: 'a-long-random-auth-token',
+  TWILIO_PHONE_NUMBER: '+15559876543',
+  PUBLIC_SERVER_URL: 'https://example.workers.dev',
+  DB: {} as never,
+};
+
 const openaiOnly: Env = {
   OPENAI_API_KEY: 'sk-test-abc123',
   DB: {} as never,
@@ -75,6 +83,94 @@ describe('mode decoupling', () => {
     expect(() => buildConfig(partial)).toThrow(
       /VAPI_API_KEY, VAPI_WEBHOOK_SECRET/,
     );
+  });
+
+  it('configures only Twilio phone mode when just the Twilio secrets are set', () => {
+    const config = buildConfig(twilioOnly);
+    expect(config.twilio).toBeDefined();
+    expect(config.vapi).toBeUndefined();
+    expect(config.openai).toBeUndefined();
+  });
+
+  it('configures Vapi, Twilio, and OpenAI simultaneously when all are set', () => {
+    const config = buildConfig({ ...vapiOnly, ...twilioOnly, ...openaiOnly });
+    expect(config.vapi).toBeDefined();
+    expect(config.twilio).toBeDefined();
+    expect(config.openai).toBeDefined();
+  });
+
+  it('rejects a partial Twilio configuration rather than silently disabling it', () => {
+    const { PUBLIC_SERVER_URL: _drop, ...partial } = twilioOnly;
+    expect(() => buildConfig(partial)).toThrow(
+      /Twilio phone-call mode is partially configured: missing PUBLIC_SERVER_URL/,
+    );
+  });
+
+  it('names every missing field in a partial Twilio configuration', () => {
+    const {
+      TWILIO_ACCOUNT_SID: _a,
+      TWILIO_AUTH_TOKEN: _b,
+      ...partial
+    } = twilioOnly;
+    expect(() => buildConfig(partial)).toThrow(
+      /TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN/,
+    );
+  });
+});
+
+describe('Twilio config shape', () => {
+  it('builds the webhook and stream URLs from PUBLIC_SERVER_URL', () => {
+    const config = buildConfig(twilioOnly);
+    expect(config.twilio?.phoneNumber).toBe('+15559876543');
+    expect(config.twilio?.serverUrl).toBe('https://example.workers.dev');
+    expect(config.twilio?.voiceWebhookUrl).toBe(
+      'https://example.workers.dev/twilio/voice',
+    );
+    expect(config.twilio?.statusWebhookUrl).toBe(
+      'https://example.workers.dev/twilio/status',
+    );
+    expect(config.twilio?.streamUrlBase).toBe(
+      'wss://example.workers.dev/twilio/stream',
+    );
+  });
+
+  it('strips a trailing slash from the server URL before building URLs', () => {
+    const config = buildConfig({
+      ...twilioOnly,
+      PUBLIC_SERVER_URL: 'https://example.workers.dev///',
+    });
+    expect(config.twilio?.voiceWebhookUrl).toBe(
+      'https://example.workers.dev/twilio/voice',
+    );
+    expect(config.twilio?.streamUrlBase).toBe(
+      'wss://example.workers.dev/twilio/stream',
+    );
+  });
+
+  it('validates Twilio secrets for contamination the same way as Vapi', () => {
+    expect(() =>
+      buildConfig({ ...twilioOnly, TWILIO_AUTH_TOKEN: 'token ' }),
+    ).toThrow(/TWILIO_AUTH_TOKEN has leading or trailing whitespace/);
+  });
+});
+
+describe('shared PUBLIC_SERVER_URL does not cross-trip the other mode\'s partial check', () => {
+  // Regression coverage for a real bug caught while wiring up Twilio: since
+  // PUBLIC_SERVER_URL is one of Vapi's four fields AND one of Twilio's four
+  // fields, a Vapi-only deploy sets it too — and a naive "some but not all
+  // of this group's fields are present" check would misread that as a
+  // half-configured Twilio setup (and vice versa for a Twilio-only deploy).
+
+  it('a Vapi-only deploy does not throw a Twilio partial-config error', () => {
+    expect(() => buildConfig(vapiOnly)).not.toThrow();
+    const config = buildConfig(vapiOnly);
+    expect(config.twilio).toBeUndefined();
+  });
+
+  it('a Twilio-only deploy does not throw a Vapi partial-config error', () => {
+    expect(() => buildConfig(twilioOnly)).not.toThrow();
+    const config = buildConfig(twilioOnly);
+    expect(config.vapi).toBeUndefined();
   });
 });
 

@@ -10,8 +10,15 @@ CREATE TABLE IF NOT EXISTS calls (
   started_at           TEXT NOT NULL,
   ended_at             TEXT,
 
-  -- Vapi live-call control URL, from monitor.controlUrl.
+  -- Vapi live-call control URL, from monitor.controlUrl. Vapi-only; see
+  -- twilio_call_sid below for the Twilio-path equivalent. Both columns
+  -- coexist deliberately while the Twilio migration is in progress — see
+  -- migrations/0001_add_twilio_call_sid.sql for why this isn't a rename.
   control_url          TEXT,
+
+  -- Twilio CallSid for the Twilio phone-mode backend (docs/technical-decisions.md,
+  -- ADR-006). Looked up by the call-status callback in routes/twilio.ts.
+  twilio_call_sid       TEXT,
 
   -- Intent object as JSON, once extracted at handoff.
   intent               TEXT,
@@ -39,6 +46,9 @@ CREATE TABLE IF NOT EXISTS transcript_lines (
 
 CREATE INDEX IF NOT EXISTS idx_transcript_call
   ON transcript_lines (call_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_calls_twilio_call_sid
+  ON calls (twilio_call_sid);
 
 -- Diagnostic log for the Vapi webhook secret handshake. Written on every
 -- POST to /vapi/webhook, success or failure, so a live "unauthorized" can be

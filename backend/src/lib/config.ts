@@ -5,19 +5,34 @@
  * So config is built from that, not read from module scope, and validation
  * happens on the first request rather than at boot.
  *
- * Two independent feature surfaces share this Worker:
+ * Three independent feature surfaces share this Worker:
  *
- *   - `vapi`  — the phone-call mode (Vapi + telephony). Paused, not scrapped;
- *     see docs/technical-decisions.md, ADR-005. Its four secrets are either
- *     all present or all absent — there is no partial state.
- *   - `openai` — the in-person mode (direct OpenAI Realtime over WebRTC),
- *     the current primary target. Needs just one secret.
+ *   - `vapi`  — phone-call mode's OLD backend (Vapi + telephony). Dormant
+ *     during the Twilio migration (docs/technical-decisions.md, ADR-006) —
+ *     kept alive only as a fallback while the Twilio path is unproven, not
+ *     because both are meant to serve real calls at once. See the note on
+ *     `Config.twilio` below for why that distinction matters.
+ *   - `twilio` — phone-call mode's NEW backend (Twilio Voice + Media Streams
+ *     + a direct OpenAI Realtime bridge). Also needs `openai` set — unlike
+ *     Vapi, which held its own OpenAI relationship, this mode calls OpenAI
+ *     directly and so depends on both blocks being present.
+ *   - `openai` — in-person mode (direct OpenAI Realtime over WebRTC), the
+ *     primary target, AND now also a dependency of `twilio`. Needs just one
+ *     secret.
  *
- * Neither gates the other. A deploy with only `OPENAI_API_KEY` set boots
- * fine and serves `/realtime/session`; `/vapi/webhook` independently reports
- * "phone mode not configured" rather than the whole Worker refusing to start.
+ * None of the three gates the others outright — `Config` keeps `vapi`,
+ * `twilio`, and `openai` as three independent optional blocks, not a
+ * combined `config.phone`. That matches how every call site already checks
+ * (`config.vapi ? ... : ...`, `config.openai && ...`): callers on the Twilio
+ * path check `config.twilio && config.openai` explicitly rather than relying
+ * on a derived "phone mode ready" flag this file would have to keep in sync.
+ * `twilio` alone isn't sufficient to serve a call — a route that needs both
+ * and gets only one should say so by name in its own error, not bury it in a
+ * shared boolean. A deploy with only `OPENAI_API_KEY` set boots fine and
+ * serves `/realtime/session`; routes for an unconfigured mode independently
+ * report "not configured" rather than the whole Worker refusing to start.
  * That decoupling is deliberate: it must stay possible to run this Worker
- * with either mode configured alone, or both, or (during setup) neither.
+ * with any subset of these configured, or none (during setup).
  */
 
 export interface Env {
@@ -36,7 +51,15 @@ export interface Env {
   VAPI_PHONE_NUMBER_ID?: string;
   VAPI_BASE_URL?: string;
 
-  // In-person mode (direct OpenAI Realtime).
+  // Phone-call mode (Twilio), the new backend. All four required together,
+  // or omit all four. PUBLIC_SERVER_URL is shared with the Vapi block above
+  // — both are "where does Twilio/Vapi call us back," same value either way.
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  TWILIO_PHONE_NUMBER?: string;
+
+  // In-person mode (direct OpenAI Realtime). Also a dependency of Twilio
+  // phone mode — see the file-level doc comment above.
   OPENAI_API_KEY?: string;
 
   DB: D1Database;
@@ -55,9 +78,30 @@ export interface OpenAiConfig {
   apiKey: string;
 }
 
+export interface TwilioConfig {
+  accountSid: string;
+  authToken: string;
+  phoneNumber: string;
+  /** `PUBLIC_SERVER_URL`, trailing slashes stripped. */
+  serverUrl: string;
+  /** Where Twilio's incoming-call webhook should point. */
+  voiceWebhookUrl: string;
+  /** Where Twilio's call-status callback should point. */
+  statusWebhookUrl: string;
+  /**
+   * Base for the Media Streams WebSocket URL — `wss://…/twilio/stream`, no
+   * trailing slash. `<Stream url>` takes a `wss://` URL, not `https://`, and
+   * can't carry query params, so routes/twilio.ts appends a path segment
+   * (`/:token`), not a query string, when building the full URL per call.
+   */
+  streamUrlBase: string;
+}
+
 export interface Config {
   /** Present only when all four Vapi secrets are set. */
   vapi?: VapiConfig;
+  /** Present only when all four Twilio secrets are set. */
+  twilio?: TwilioConfig;
   /** Present only when OPENAI_API_KEY is set. */
   openai?: OpenAiConfig;
 }
@@ -70,15 +114,47 @@ const ALL_SECRET_FIELDS = [
   'PUBLIC_SERVER_URL',
   'VAPI_PHONE_NUMBER_ID',
   'VAPI_BASE_URL',
+  'TWILIO_ACCOUNT_SID',
+  'TWILIO_AUTH_TOKEN',
+  'TWILIO_PHONE_NUMBER',
   'OPENAI_API_KEY',
 ] as const;
 
-/** The four that form phone-call mode — present together, or not at all. */
+/** The four that form Vapi phone-call mode — present together, or not at all. */
 const VAPI_FIELDS = [
   'VAPI_API_KEY',
   'VAPI_WEBHOOK_SECRET',
   'VAPI_PHONE_NUMBER',
   'PUBLIC_SERVER_URL',
+] as const;
+
+/**
+ * The three that are exclusively Vapi's — used only to decide whether Vapi
+ * was *attempted* at all. `PUBLIC_SERVER_URL` deliberately isn't in this
+ * list even though it's required to complete the group (see VAPI_FIELDS):
+ * it's shared with Twilio below, so on its own it can't mean "someone meant
+ * to configure Vapi" — a Twilio-only deploy sets it too, and must not trip
+ * Vapi's "partially configured" error just because they share one field.
+ */
+const VAPI_SPECIFIC_FIELDS = [
+  'VAPI_API_KEY',
+  'VAPI_WEBHOOK_SECRET',
+  'VAPI_PHONE_NUMBER',
+] as const;
+
+/** The four that form Twilio phone-call mode — present together, or not at all. */
+const TWILIO_FIELDS = [
+  'TWILIO_ACCOUNT_SID',
+  'TWILIO_AUTH_TOKEN',
+  'TWILIO_PHONE_NUMBER',
+  'PUBLIC_SERVER_URL',
+] as const;
+
+/** Same reasoning as VAPI_SPECIFIC_FIELDS, mirrored for Twilio. */
+const TWILIO_SPECIFIC_FIELDS = [
+  'TWILIO_ACCOUNT_SID',
+  'TWILIO_AUTH_TOKEN',
+  'TWILIO_PHONE_NUMBER',
 ] as const;
 
 /**
@@ -151,8 +227,9 @@ export function buildConfig(env: Env): Config {
 
   const config: Config = {};
 
-  const vapiPresent = VAPI_FIELDS.filter((name) => env[name]);
-  if (vapiPresent.length === VAPI_FIELDS.length) {
+  const vapiFullyPresent = VAPI_FIELDS.filter((name) => env[name]);
+  const vapiAttempted = VAPI_SPECIFIC_FIELDS.some((name) => env[name]);
+  if (vapiFullyPresent.length === VAPI_FIELDS.length) {
     const serverUrl = env.PUBLIC_SERVER_URL!.replace(/\/+$/, '');
     config.vapi = {
       apiKey: env.VAPI_API_KEY!,
@@ -164,11 +241,13 @@ export function buildConfig(env: Env): Config {
       baseUrl: env.VAPI_BASE_URL ?? 'https://api.vapi.ai',
       webhookUrl: `${serverUrl}/vapi/webhook`,
     };
-  } else if (vapiPresent.length > 0) {
-    // Some but not all four — almost certainly a mistake (e.g. one secret
-    // never got added, or was deleted while rotating), not an intentional
-    // "half-configured" state. Fail loudly rather than silently treating
-    // phone mode as unconfigured when someone thought they'd set it up.
+  } else if (vapiAttempted) {
+    // At least one Vapi-specific secret is set but the group isn't complete
+    // — almost certainly a mistake (e.g. one secret never got added, or was
+    // deleted while rotating), not an intentional "half-configured" state.
+    // Checked via vapiAttempted (VAPI_SPECIFIC_FIELDS), not vapiFullyPresent
+    // alone: PUBLIC_SERVER_URL is shared with Twilio below, so its presence
+    // by itself must not read as "someone meant to configure Vapi."
     const missing = VAPI_FIELDS.filter((name) => !env[name]);
     throw new Error(
       `Phone-call mode is partially configured: missing ${missing.join(', ')}. ` +
@@ -176,8 +255,34 @@ export function buildConfig(env: Env): Config {
         'disabled — see docs/SETUP.md.',
     );
   }
-  // vapiPresent.length === 0: phone mode simply isn't configured. Not an
-  // error — it's paused, and a fresh in-person-only deploy shouldn't need it.
+  // Neither branch: phone mode simply isn't configured. Not an error — it's
+  // paused, and a fresh in-person-only deploy shouldn't need it.
+
+  const twilioFullyPresent = TWILIO_FIELDS.filter((name) => env[name]);
+  const twilioAttempted = TWILIO_SPECIFIC_FIELDS.some((name) => env[name]);
+  if (twilioFullyPresent.length === TWILIO_FIELDS.length) {
+    const serverUrl = env.PUBLIC_SERVER_URL!.replace(/\/+$/, '');
+    config.twilio = {
+      accountSid: env.TWILIO_ACCOUNT_SID!,
+      authToken: env.TWILIO_AUTH_TOKEN!,
+      phoneNumber: env.TWILIO_PHONE_NUMBER!,
+      serverUrl,
+      voiceWebhookUrl: `${serverUrl}/twilio/voice`,
+      statusWebhookUrl: `${serverUrl}/twilio/status`,
+      streamUrlBase: `${serverUrl.replace(/^http/, 'ws')}/twilio/stream`,
+    };
+  } else if (twilioAttempted) {
+    // Same reasoning as the Vapi partial-config check above, mirrored: gated
+    // on twilioAttempted (TWILIO_SPECIFIC_FIELDS) rather than
+    // twilioFullyPresent alone, for the same shared-PUBLIC_SERVER_URL reason.
+    const missing = TWILIO_FIELDS.filter((name) => !env[name]);
+    throw new Error(
+      `Twilio phone-call mode is partially configured: missing ${missing.join(', ')}. ` +
+        'Set all four Twilio secrets to enable it, or none to leave it ' +
+        'disabled — see docs/SETUP.md.',
+    );
+  }
+  // Neither branch: Twilio phone mode simply isn't configured.
 
   if (env.OPENAI_API_KEY) {
     config.openai = { apiKey: env.OPENAI_API_KEY };
