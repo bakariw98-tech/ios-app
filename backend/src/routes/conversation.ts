@@ -21,13 +21,17 @@ import {
   ConversationIntentSchema,
 } from '../domain/conversationIntent.js';
 import {
+  FINISH_INTERVIEW_TOOL,
   INTERVIEW_REPLY_JSON_SCHEMA,
   InterviewReplySchema,
   InterviewRequestSchema,
   MAX_INTERVIEW_QUESTIONS,
+  SpokenTranscriptSchema,
   buildExtractionMessages,
   buildFinalizeNudgeMessage,
   buildInterviewMessages,
+  buildSpokenExtractionMessages,
+  buildSpokenInterviewInstructions,
   normalizeInterviewReply,
 } from '../domain/conversationInterview.js';
 import {
@@ -141,6 +145,103 @@ export function registerConversationRoutes(app: Hono<AppBindings>): void {
       questionsAsked,
       questionsRemaining: 0,
     });
+  });
+
+  /**
+   * Mints the SPOKEN interview session — the user talks to the interviewer
+   * rather than typing to it. Same WebRTC mechanism as the live conversation;
+   * the differences are the prompt, the finish_interview tool (a voice session
+   * has no structured-output channel to carry a done flag), and input
+   * transcription, which is what the extraction afterwards actually reads.
+   */
+  app.post('/conversation/interview-session', async (c) => {
+    const { openai } = c.get('config');
+    if (!openai) {
+      return c.json({ error: 'the conversation engine is not configured' }, 503);
+    }
+
+    const body = (await c.req.json().catch(() => ({}))) as {
+      userFirstName?: unknown;
+      voice?: unknown;
+    };
+
+    const userFirstName =
+      typeof body.userFirstName === 'string' && body.userFirstName.trim()
+        ? body.userFirstName.trim().slice(0, 100)
+        : undefined;
+
+    const voice = (VOICES as readonly string[]).includes(String(body.voice))
+      ? (body.voice as (typeof VOICES)[number])
+      : DEFAULT_VOICE;
+
+    try {
+      const session = await mintEphemeralSession(openai.apiKey, {
+        voice,
+        instructions: buildSpokenInterviewInstructions({ userFirstName }),
+        tools: [{ ...FINISH_INTERVIEW_TOOL }],
+        // Without this we get the interviewer's questions and none of the
+        // answers, which would make the extraction afterwards worthless.
+        transcribeInput: true,
+      });
+
+      return c.json({
+        clientSecret: session.clientSecret,
+        expiresAt: session.expiresAt,
+        model: session.model,
+        voice: session.voice,
+        // Named so the client watches for the right tool call rather than
+        // hardcoding a second copy of the string.
+        finishToolName: FINISH_INTERVIEW_TOOL.name,
+      });
+    } catch (error) {
+      console.error('Failed to mint a spoken interview session:', error);
+      const detail = error instanceof Error ? error.message : String(error);
+      return c.json({ error: 'could not start the interview', detail }, 502);
+    }
+  });
+
+  /**
+   * Turns a finished spoken interview's transcript into the intent object.
+   * The typed path does this inline on its last turn; the spoken path needs it
+   * as its own endpoint because the interview itself never touches this Worker
+   * — the audio goes straight from the browser to OpenAI.
+   */
+  app.post('/conversation/extract', async (c) => {
+    const { openai } = c.get('config');
+    if (!openai) {
+      return c.json({ error: 'the conversation engine is not configured' }, 503);
+    }
+
+    const body = await c.req.json().catch(() => null);
+    if (body === null) return c.json({ error: 'invalid JSON body' }, 400);
+
+    const parsed = SpokenTranscriptSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: 'invalid transcript', issues: parsed.error.issues },
+        400,
+      );
+    }
+
+    try {
+      const raw = await runStructuredCompletion({
+        apiKey: openai.apiKey,
+        messages: buildSpokenExtractionMessages(parsed.data),
+        schemaName: 'conversation_intent',
+        jsonSchema: CONVERSATION_INTENT_JSON_SCHEMA,
+        maxCompletionTokens: INTENT_MAX_TOKENS,
+      });
+      const validated = ConversationIntentSchema.safeParse(JSON.parse(raw));
+      if (!validated.success) {
+        throw new Error(`unexpected shape: ${JSON.stringify(validated.error.issues)}`);
+      }
+      return c.json({ intent: validated.data });
+    } catch (error) {
+      console.error('Spoken intent extraction failed:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      const detail = message.length > 500 ? `${message.slice(0, 500)}…` : message;
+      return c.json({ error: 'could not build the conversation brief', detail }, 502);
+    }
   });
 
   app.post('/conversation/session', async (c) => {

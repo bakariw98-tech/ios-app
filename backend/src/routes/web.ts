@@ -91,6 +91,7 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   body[data-state="idle"] .screen-brief,
   body[data-state="failed"] .screen-brief { display: block; }
   body[data-state="intake"] .screen-intake { display: block; }
+  body[data-state="interview"] .screen-interview { display: block; }
   body[data-state="review"] .screen-review { display: block; }
   body[data-state="connecting"] .screen-connecting { display: block; }
   body[data-state="live"] .screen-live { display: block; }
@@ -264,8 +265,25 @@ export const WEB_CLIENT_HTML = `<!doctype html>
       placeholder="e.g. &quot;I need to talk to my friend Alex. We haven&#39;t spoken since March and I want to fix it.&quot;"></textarea>
 
     <button class="btn-primary" id="startButton" disabled>Next — a few quick questions</button>
+    <button class="btn-skip" id="typeInsteadButton" hidden>Type it instead</button>
 
     <div class="error-banner" id="errorBanner"></div>
+  </div>
+
+  <div class="screen screen-interview">
+    <div class="live-badge"><span class="live-dot"></span> Listening</div>
+    <p class="subtitle">
+      Talk it through out loud. It&rsquo;ll ask a few questions, then build the
+      brief. Take your time &mdash; rambling is fine.
+    </p>
+
+    <div id="interviewLog" class="intake-log"></div>
+
+    <button class="btn-primary" id="interviewDoneButton">That&rsquo;s everything — build the brief</button>
+    <button class="btn-skip" id="interviewCancelButton">Cancel</button>
+
+    <div class="status-line" id="interviewStatus"></div>
+    <div class="inline-error" id="interviewError" hidden></div>
   </div>
 
   <div class="screen screen-review">
@@ -397,6 +415,12 @@ export const WEB_CLIENT_HTML = `<!doctype html>
 
   const engineTransactional = $('engineTransactional');
   const engineConversation = $('engineConversation');
+  const typeInsteadButton = $('typeInsteadButton');
+  const interviewLog = $('interviewLog');
+  const interviewStatus = $('interviewStatus');
+  const interviewError = $('interviewError');
+  const interviewDoneButton = $('interviewDoneButton');
+  const interviewCancelButton = $('interviewCancelButton');
   const situationLabel = $('situationLabel');
   const intentCard = $('intentCard');
   const goLiveButton = $('goLiveButton');
@@ -441,10 +465,10 @@ export const WEB_CLIENT_HTML = `<!doctype html>
 
   const ENGINE_COPY = {
     conversation: {
-      label: 'What do you need to talk to them about?',
+      label: 'Roughly what is it about? (optional — you can just talk)',
       placeholder:
-        "e.g. \\"I need to talk to my friend Alex. We haven't spoken since March and I want to fix it.\\"",
-      next: 'Next — a few quick questions',
+        "e.g. \\"I need to talk to my friend Alex. We haven't spoken since March.\\"",
+      next: '🎙 Start talking',
     },
     transactional: {
       label: 'What do you need said?',
@@ -466,6 +490,15 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     situationLabel.textContent = copy.label;
     situationInput.placeholder = copy.placeholder;
     startButton.textContent = copy.next;
+
+    // The spoken interview needs nothing typed to begin — requiring an
+    // opening paragraph before you're allowed to talk would reintroduce
+    // exactly the friction speaking is here to remove. The transactional
+    // engine still requires its brief, since it has no interview to draw
+    // one out.
+    typeInsteadButton.hidden = next !== 'conversation';
+    startButton.disabled =
+      next === 'conversation' ? false : situationInput.value.trim().length === 0;
   }
 
   // Called on load so window.__engine and the copy are correct from the start,
@@ -546,11 +579,31 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   }
 
   situationInput.addEventListener('input', () => {
+    if (engine === 'conversation') return; // never gated on typed input
     startButton.disabled = situationInput.value.trim().length === 0;
   });
 
   startButton.addEventListener('click', () => {
-    beginIntake();
+    // The conversation engine's interview is spoken — talking through
+    // something you're dreading is easier than typing it, and typing an
+    // emotional backstory is the friction this engine exists to remove.
+    // (The transactional engine's intake stays typed: its population is
+    // people who can't reliably produce speech — see domain/inPersonIntake.ts.)
+    if (engine === 'conversation') beginSpokenInterview();
+    else beginIntake();
+  });
+
+  // Fallback for a denied microphone, or anyone who'd rather type. Routes into
+  // the typed interview loop, which is the same engine — only the medium
+  // differs, and both share their substance via interviewCore().
+  typeInsteadButton.addEventListener('click', () => beginIntake());
+
+  interviewDoneButton.addEventListener('click', () => finishInterview());
+
+  interviewCancelButton.addEventListener('click', () => {
+    interviewFinished = true;
+    teardown();
+    setState('idle');
   });
 
   intakeSendButton.addEventListener('click', sendIntakeAnswer);
@@ -618,8 +671,16 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     currentIntent = null;
     window.__intent = null;
     intentCard.innerHTML = '';
+    interviewTranscript = [];
+    window.__interviewTranscript = interviewTranscript;
+    interviewLog.innerHTML = '';
+    interviewError.hidden = true;
+    interviewStatus.textContent = '';
+    interviewFinished = false;
     intakeAbandoned = false;
-    startButton.disabled = true;
+    // Re-derives the disabled state from the selected engine rather than
+    // forcing it true, which would leave the spoken flow unstartable.
+    setEngine(engine);
     setState('idle');
   });
 
@@ -628,6 +689,11 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   let intakeTurns = [];
   /** The extracted ConversationIntent, held between the review screen and going live. */
   let currentIntent = null;
+  /** Accumulated spoken-interview transcript, both sides, in arrival order. */
+  let interviewTranscript = [];
+  /** Latched so the model's tool call and the user's own button can't both fire the finish. */
+  let interviewFinished = false;
+  let finishToolName = 'finish_interview';
   // Set true the instant Skip is clicked, so a late-arriving /intake/turn
   // response (the user skipped while a request was in flight) is a no-op
   // rather than something that could still move the UI.
@@ -655,10 +721,17 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   // (a full re-render from intakeTurns would erase the seed bubble in
   // beginIntake, which isn't stored in intakeTurns — see its comment).
   function appendIntakeBubble(className, text) {
+    appendBubble(intakeLog, className, text);
+  }
+
+  // textContent, never innerHTML: this renders both typed user input and
+  // speech-to-text output, neither of which is trusted markup.
+  function appendBubble(container, className, text) {
     const div = document.createElement('div');
     div.className = className;
     div.textContent = text;
-    intakeLog.appendChild(div);
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
   }
 
   function sendIntakeAnswer() {
@@ -782,25 +855,37 @@ export const WEB_CLIENT_HTML = `<!doctype html>
 
   async function start(brief) {
     window.__startedWith = brief;
-    const sessionUrl = endpoints().session;
+    const session = await connectRealtime(endpoints().session, brief);
+    window.__correctionMarker = session.correctionMarker;
+    setState('live');
+  }
+
+  /**
+   * Mints a session at \`sessionUrl\` and brings up the WebRTC connection to
+   * OpenAI. Shared by the spoken interview and the live conversation — they
+   * differ only in which endpoint mints the session and what they do with the
+   * events, not in any of the connection mechanics, so this is factored rather
+   * than duplicated. Returns the parsed session response; per-message handling
+   * goes through onDataChannelMessage.
+   */
+  async function connectRealtime(sessionUrl, body) {
     setState('connecting');
     log(\`POSTing to \${sessionUrl}…\`);
 
     const res = await fetch(sessionUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(brief),
+      body: JSON.stringify(body),
     });
 
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
+      const errorBody = await res.json().catch(() => ({}));
       throw new Error(
-        \`\${sessionUrl} \${res.status}: \${body.error || 'unknown error'}\`
+        \`\${sessionUrl} \${res.status}: \${errorBody.error || 'unknown error'}\`
       );
     }
 
     const session = await res.json();
-    window.__correctionMarker = session.correctionMarker;
     log(\`Session minted. voice=\${session.voice} model=\${session.model}\`);
 
     // No ICE servers: OpenAI's endpoint is a direct SDP exchange over HTTPS,
@@ -836,7 +921,8 @@ export const WEB_CLIENT_HTML = `<!doctype html>
         parsed = event.data;
       }
       window.__lastReceived = parsed;
-      log(\`recv: \${event.data.slice(0, 200)}\`);
+      log(\`recv: \${String(event.data).slice(0, 200)}\`);
+      if (parsed && typeof parsed === 'object') onDataChannelMessage(parsed);
     };
 
     const offer = await pc.createOffer();
@@ -860,7 +946,121 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSDP });
     log('Remote description set. signalingState=' + pc.signalingState);
 
-    setState('live');
+    return session;
+  }
+
+  // --- Spoken interview ------------------------------------------------
+
+  async function beginSpokenInterview() {
+    interviewTranscript = [];
+    window.__interviewTranscript = interviewTranscript;
+    interviewLog.innerHTML = '';
+    interviewError.hidden = true;
+    interviewStatus.textContent = '';
+    interviewFinished = false;
+
+    try {
+      const session = await connectRealtime('/conversation/interview-session', {
+        userFirstName: nameInput.value.trim() || undefined,
+      });
+      // Read off the response rather than hardcoded, so the client cannot
+      // drift from the tool the server actually registered.
+      finishToolName = session.finishToolName || 'finish_interview';
+      setState('interview');
+    } catch (error) {
+      console.error(error);
+      setState('failed', String(error && error.message ? error.message : error));
+    }
+  }
+
+  /**
+   * Routes data-channel events. Only the spoken interview needs anything from
+   * them today; the live conversation still just logs.
+   */
+  function onDataChannelMessage(msg) {
+    if (body.dataset.state !== 'interview') return;
+
+    const type = typeof msg.type === 'string' ? msg.type : '';
+
+    // The interviewer's spoken question, once it has finished saying it.
+    // Event name confirmed live against this API; the second is a defensive
+    // fallback for the older spelling.
+    if (
+      type === 'response.output_audio_transcript.done' ||
+      type === 'response.audio_transcript.done'
+    ) {
+      if (msg.transcript) addInterviewTurn('assistant', msg.transcript);
+      return;
+    }
+
+    // The user's own speech, transcribed. Matched loosely on purpose: this is
+    // the one event name in this flow NOT verified against a live session
+    // (doing so needs a real microphone and outbound UDP, neither of which the
+    // sandbox this was built in has). Matching on the stable middle of the
+    // name rather than an exact string means a variant spelling still works
+    // instead of silently producing a transcript with no answers in it.
+    if (type.indexOf('input_audio_transcription') !== -1 && /\\.(completed|done)$/.test(type)) {
+      if (msg.transcript) addInterviewTurn('user', msg.transcript);
+      return;
+    }
+
+    // The interviewer signalling it has what it needs.
+    if (
+      type === 'response.function_call_arguments.done' &&
+      msg.name === finishToolName
+    ) {
+      log('finish_interview called by the model.');
+      finishInterview();
+    }
+  }
+
+  function addInterviewTurn(role, text) {
+    const trimmed = String(text).trim();
+    if (!trimmed) return;
+    interviewTranscript.push({ role, text: trimmed });
+    window.__interviewTranscript = interviewTranscript;
+    appendBubble(interviewLog, role === 'assistant' ? 'intake-q' : 'intake-a', trimmed);
+  }
+
+  async function finishInterview() {
+    // Guarded because there are two ways in — the model's tool call and the
+    // user's own button — and they can race if someone taps as it fires.
+    if (interviewFinished) return;
+    interviewFinished = true;
+
+    teardown();
+
+    if (!interviewTranscript.length) {
+      setState('failed', 'Nothing was captured from the interview — try again.');
+      return;
+    }
+
+    setState('connecting');
+    log('POSTing transcript to /conversation/extract…');
+
+    try {
+      const res = await fetch('/conversation/extract', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          userFirstName: nameInput.value.trim() || undefined,
+          turns: interviewTranscript,
+        }),
+      });
+      const parsedBody = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          \`/conversation/extract \${res.status}: \${parsedBody.error || 'unknown error'}\${parsedBody.detail ? \` — \${parsedBody.detail}\` : ''}\`,
+        );
+      }
+      currentIntent = parsedBody.intent;
+      window.__intent = currentIntent;
+      renderIntentCard(currentIntent);
+      setState('review');
+    } catch (error) {
+      console.error(error);
+      setState('failed', String(error && error.message ? error.message : error));
+    }
   }
 
   function sendCorrection() {

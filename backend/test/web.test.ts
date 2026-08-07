@@ -225,3 +225,54 @@ describe('GET /web — the conversation engine', () => {
     expect(body).toContain('window.__intent');
   });
 });
+
+describe('GET /web — the spoken interview', () => {
+  it('routes the conversation engine to the spoken interview, not the typed loop', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain("'/conversation/interview-session'");
+    expect(body).toContain("'/conversation/extract'");
+    expect(body).toMatch(/if\s*\(engine === 'conversation'\)\s*beginSpokenInterview\(\)/);
+  });
+
+  it('keeps a typed fallback for a denied microphone', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('id="typeInsteadButton"');
+  });
+
+  it('never gates the spoken flow on typed input', async () => {
+    // Requiring a typed paragraph before you may start talking would put back
+    // exactly the friction speaking removes.
+    const body = await (await getWebPage()).text();
+    expect(body).toMatch(/never gated on typed input/);
+  });
+
+  it('captures both sides of the interview transcript', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('response.output_audio_transcript.done');
+    expect(body).toContain('input_audio_transcription');
+  });
+
+  it('watches for the finish tool by the name the server returned', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('response.function_call_arguments.done');
+    expect(body).toMatch(/msg\.name === finishToolName/);
+    expect(body).toMatch(/session\.finishToolName/);
+  });
+
+  it('latches the finish so the tool call and the button cannot both fire it', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toMatch(/if \(interviewFinished\) return;/);
+    expect(body).toContain('id="interviewDoneButton"');
+  });
+
+  it('renders transcript bubbles as text, never as markup', async () => {
+    // These carry speech-to-text output, which is not trusted markup.
+    const body = await (await getWebPage()).text();
+    expect(body).toMatch(/div\.textContent = text;/);
+  });
+
+  it('exposes window.__interviewTranscript as a test hook', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('window.__interviewTranscript');
+  });
+});

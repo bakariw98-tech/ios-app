@@ -10,20 +10,26 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  FINISH_INTERVIEW_TOOL,
   INTERVIEW_REPLY_JSON_SCHEMA,
   InterviewReplySchema,
   InterviewRequestSchema,
   MAX_INTERVIEW_QUESTIONS,
   MAX_INTERVIEW_TURNS,
+  MAX_SPOKEN_TURNS,
+  SpokenTranscriptSchema,
   buildExtractionInstructions,
   buildExtractionMessages,
   buildFinalizeNudgeMessage,
   buildInterviewInstructions,
   buildInterviewMessages,
+  buildSpokenExtractionMessages,
+  buildSpokenInterviewInstructions,
   normalizeInterviewReply,
 } from '../src/domain/conversationInterview.js';
 
 const prompt = buildInterviewInstructions({ userFirstName: 'Sam' });
+const spoken = buildSpokenInterviewInstructions({ userFirstName: 'Sam' });
 const extraction = buildExtractionInstructions();
 
 describe('reply schema stays in sync and strict-mode-valid', () => {
@@ -259,5 +265,125 @@ describe('message assembly', () => {
     const nudge = buildFinalizeNudgeMessage();
     expect(nudge.role).toBe('system');
     expect(nudge.content).toMatch(/Do\s+not\s+ask\s+anything\s+else/i);
+  });
+});
+
+describe('the spoken interview shares its substance with the typed one', () => {
+  // The two prompts differ only in medium and in how they signal they're
+  // finished. Everything that determines interview QUALITY is shared via
+  // interviewCore(), because two hand-maintained copies would drift within a
+  // week — and silently, since both would still produce plausible interviews,
+  // just different ones. These assertions are what makes that structural.
+  const sharedSubstance = [
+    /question\s+you\s+must\s+never\s+ask/i,
+    /gets\s+you\s+a\s+script/i,
+    /what\s+they\s+want\s+to\s+walk\s+away\s+WITH/i,
+    /Ask\s+this\s+outright,\s+every\s+single\s+time/i,
+    /Never\s+ask\s+this\s+abstractly/i,
+    /specific\s+hypothetical/i,
+    /Never\s+give\s+advice/i,
+    /Never\s+reframe\s+what\s+happened/i,
+    /Three\s+things\s+are\s+non-negotiable/i,
+    /The\s+room\s+to\s+move/i,
+    /it\s+is\s+a\s+failed\s+one/i,
+  ];
+
+  for (const pattern of sharedSubstance) {
+    it(`both carry ${pattern}`, () => {
+      expect(prompt).toMatch(pattern);
+      expect(spoken).toMatch(pattern);
+    });
+  }
+
+  it('both forbid the same question verbatim', () => {
+    expect(prompt).toContain('"What do you want me to say?"');
+    expect(spoken).toContain('"What do you want me to say?"');
+  });
+});
+
+describe('the spoken interview differs only where the medium demands', () => {
+  it('tells the typed one it is typed and the spoken one it is spoken', () => {
+    expect(prompt).toMatch(/is\s+typing\s+to\s+you/i);
+    expect(spoken).toMatch(/This\s+is\s+a\s+spoken\s+conversation/i);
+  });
+
+  it('finishes via a flag when typed and a tool call when spoken', () => {
+    expect(prompt).toMatch(/Set\s+done\s+to\s+true/i);
+    expect(prompt).not.toMatch(/finish_interview/);
+    expect(spoken).toMatch(/call\s+the\s+finish_interview\s+tool/i);
+    expect(spoken).not.toMatch(/Set\s+done\s+to\s+true/i);
+  });
+
+  it('carries voice-specific guidance the typed one has no need for', () => {
+    expect(spoken).toMatch(/Keep\s+questions\s+SHORT/i);
+    expect(spoken).toMatch(/Let\s+them\s+ramble/i);
+    // A spoken question can't be re-read — the reason brevity matters more here.
+    expect(spoken).toMatch(/cannot\s+be\s+re-read|written\s+question\s+can\s+be\s+re-read/i);
+    expect(prompt).not.toMatch(/Let\s+them\s+ramble/i);
+  });
+
+  it('forbids the spoken one from narrating the machinery out loud', () => {
+    expect(spoken).toMatch(/Never\s+mention\s+tools,\s+briefs,\s+fields/i);
+    expect(spoken).toMatch(/never\s+number\s+your\s+questions\s+out\s+loud/i);
+  });
+
+  it('has it speak a closing line before calling the tool, not after', () => {
+    // Calling the tool first would cut the session dead mid-silence, which
+    // reads as a crash rather than an ending.
+    expect(spoken).toMatch(/closing\s+line\s+out\s+loud.*then\s+call/is);
+  });
+});
+
+describe('FINISH_INTERVIEW_TOOL', () => {
+  it('is a zero-argument function tool', () => {
+    expect(FINISH_INTERVIEW_TOOL.type).toBe('function');
+    expect(FINISH_INTERVIEW_TOOL.name).toBe('finish_interview');
+    expect(FINISH_INTERVIEW_TOOL.parameters.properties).toEqual({});
+    expect(FINISH_INTERVIEW_TOOL.parameters.required).toEqual([]);
+  });
+
+  it('tells the model to call it when the person says they are done too', () => {
+    expect(FINISH_INTERVIEW_TOOL.description).toMatch(/says\s+they\s+are\s+done/i);
+  });
+});
+
+describe('spoken transcript extraction', () => {
+  const transcript = {
+    userFirstName: 'Sam',
+    turns: [
+      { role: 'assistant' as const, text: "What's going on?" },
+      { role: 'user' as const, text: 'I need to talk to my sister.' },
+    ],
+  };
+
+  it('reuses the typed extraction instructions unchanged', () => {
+    // The extraction prompt is about reading a finished interview and sorting
+    // what it finds — nothing about it is modality-specific, so a second copy
+    // would be pure drift risk.
+    const messages = buildSpokenExtractionMessages(transcript);
+    expect(messages[0]!.content).toBe(buildExtractionInstructions());
+  });
+
+  it('flattens the transcript and warns the model about speech artefacts', () => {
+    const messages = buildSpokenExtractionMessages(transcript);
+    expect(messages).toHaveLength(2);
+    expect(messages[1]!.content).toMatch(/spoken\s+out\s+loud\s+and\s+transcribed/i);
+    expect(messages[1]!.content).toMatch(/false\s+starts\s+and\s+filler/i);
+    expect(messages[1]!.content).toContain('Interviewer asked:');
+    expect(messages[1]!.content).toContain('They said:');
+    expect(messages[1]!.content).toContain('Their first name is Sam.');
+  });
+
+  it('requires at least one turn — an empty transcript has nothing to extract', () => {
+    expect(SpokenTranscriptSchema.safeParse({ turns: [] }).success).toBe(false);
+  });
+
+  it('caps turns well above the typed cap, since speech has no Q/A rhythm', () => {
+    expect(MAX_SPOKEN_TURNS).toBeGreaterThan(MAX_INTERVIEW_TURNS);
+    const tooMany = Array.from({ length: MAX_SPOKEN_TURNS + 1 }, () => ({
+      role: 'user' as const,
+      text: 'x',
+    }));
+    expect(SpokenTranscriptSchema.safeParse({ turns: tooMany }).success).toBe(false);
   });
 });

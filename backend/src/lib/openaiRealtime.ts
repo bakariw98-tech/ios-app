@@ -31,6 +31,21 @@ export interface RealtimeVoiceConfig {
   model?: string;
   voice: 'marin' | 'cedar';
   instructions: string;
+  /**
+   * Session-level function tools. Used by the spoken interview, which needs a
+   * way for the model to signal "I have what I need" from inside a voice
+   * conversation — there is no structured-output channel to carry a `done`
+   * flag the way the typed interview has. Omitted for sessions that just talk.
+   */
+  tools?: Array<Record<string, unknown>>;
+  /**
+   * Turn on transcription of the CALLER's audio. Off by default: the delegate
+   * sessions only need to hear, not to produce a record. The spoken interview
+   * needs it, because the transcript is the raw material the intent gets
+   * extracted from afterwards — without it we'd have the model's questions and
+   * none of the answers.
+   */
+  transcribeInput?: boolean;
 }
 
 export interface EphemeralSession {
@@ -66,9 +81,18 @@ export async function mintEphemeralSession(
         model,
         instructions: config.instructions,
         output_modalities: ['audio'],
+        ...(config.tools ? { tools: config.tools, tool_choice: 'auto' } : {}),
         audio: {
           input: {
             format: { type: 'audio/pcm', rate: 24000 },
+            // Field name confirmed live against this exact endpoint, not taken
+            // from docs — `audio.input.transcription`, nested, not the older
+            // flat `input_audio_transcription`. This API surface has already
+            // cost this repo two debug cycles (see REALTIME_MODEL above), so
+            // it is verified rather than assumed.
+            ...(config.transcribeInput
+              ? { transcription: { model: 'gpt-4o-mini-transcribe' } }
+              : {}),
             turn_detection: {
               type: 'semantic_vad',
               // The other person interrupting mid-sentence is normal

@@ -114,18 +114,21 @@ export function normalizeInterviewReply(
   return { kind: 'question', question: reply.question };
 }
 
-export function buildInterviewInstructions(opts: {
-  userFirstName?: string;
-}): string {
-  const addressAs = opts.userFirstName?.trim() || 'the user';
-
+/**
+ * Everything both interviews say, which is nearly all of it.
+ *
+ * The typed and spoken interviews differ in exactly three places: how they
+ * open, a couple of lines about the medium, and how they signal they are
+ * finished (a `done` flag versus a tool call). Everything that actually
+ * determines interview *quality* — the question never to ask, what to draw
+ * out and in what order, the not-therapy rules, and the three non-negotiables
+ * — is identical, so it lives here and is shared rather than copied. Two
+ * hand-maintained copies of this would drift within a week, and the drift
+ * would be silent: both would still produce plausible interviews, just
+ * different ones.
+ */
+function interviewCore(addressAs: string): string {
   return `
-You are helping ${addressAs} prepare for a conversation they are dreading.
-Shortly, an AI is going to have that conversation on their behalf, live, with
-a real person who will push back, get emotional, and say things nobody
-planned for. Your job is to find out enough that the AI can hold its own in
-that room and actually get somewhere.
-
 ## The question you must never ask
 
 "What do you want me to say?"
@@ -201,8 +204,8 @@ You are not their therapist, their friend, or their advisor.
 
 ## When to stop
 
-Three things are non-negotiable. Do NOT set done to true until you have all
-three, unless ${addressAs} stops you first:
+Three things are non-negotiable. Do NOT finish until you have all three,
+unless ${addressAs} stops you first:
 
 1. **The goal** — an outcome, not a topic.
 2. **The hard line** — asked outright, even if the answer turns out to be
@@ -222,7 +225,7 @@ AI can work without them. Ask for those with whatever budget is left — and of
 those, what ${addressAs} wants to find out is worth the most, because it is
 often the real reason they are having this conversation at all.
 
-Set done to true as soon as ANY of these is true:
+Finish as soon as ANY of these is true:
 
 - You have all three non-negotiables AND you have either asked what
   ${addressAs} wants to find out, or used your last question getting them.
@@ -231,8 +234,105 @@ Set done to true as soon as ANY of these is true:
   stop immediately, whatever you still don't know.
 
 Past those three, fewer questions is better — this is an unpleasant subject and
-every question costs them something. When you set done to true, leave question
-null and say nothing else; a different step takes it from there.
+every question costs them something.
+`.trim();
+}
+
+export function buildInterviewInstructions(opts: {
+  userFirstName?: string;
+}): string {
+  const addressAs = opts.userFirstName?.trim() || 'the user';
+
+  return `
+You are helping ${addressAs} prepare for a conversation they are dreading.
+Shortly, an AI is going to have that conversation on their behalf, live, with
+a real person who will push back, get emotional, and say things nobody
+planned for. Your job is to find out enough that the AI can hold its own in
+that room and actually get somewhere.
+
+${addressAs} is typing to you. Everything you say is read on a screen.
+
+${interviewCore(addressAs)}
+
+## How to signal you are finished
+
+Set done to true, leave question null, and say nothing else — a different step
+takes it from there.
+`.trim();
+}
+
+/**
+ * The tool the spoken interview calls to say it has what it needs.
+ *
+ * A voice session has no structured-output channel, so there is no `done`
+ * flag to set — the model needs some in-band way to hand control back, and a
+ * function call is the only one that is unambiguous. The alternative,
+ * sniffing the transcript for a closing phrase, would misfire the first time
+ * someone said "okay, that's everything" as an *answer* rather than as the
+ * interviewer wrapping up.
+ *
+ * It takes no arguments on purpose. The intent is extracted afterwards from
+ * the full transcript by a model that can see the whole conversation at once;
+ * asking a voice model to also emit a dozen structured fields mid-call gets a
+ * worse result on both jobs.
+ */
+export const FINISH_INTERVIEW_TOOL = {
+  type: 'function',
+  name: 'finish_interview',
+  description:
+    'Call this the moment you have enough to brief the AI that will have ' +
+    'this conversation — or the moment the person says they are done. ' +
+    'Say a short closing line out loud first, then call it.',
+  parameters: { type: 'object', properties: {}, required: [] },
+} as const;
+
+/**
+ * The spoken interview's instructions.
+ *
+ * Shares everything substantive with the typed interview via
+ * `interviewCore` — see that function's doc comment. What differs is real but
+ * small: spoken questions have to be shorter than written ones (there is no
+ * re-reading a sentence you half-heard), people ramble and the model must let
+ * them, and finishing is a tool call rather than a flag.
+ */
+export function buildSpokenInterviewInstructions(opts: {
+  userFirstName?: string;
+}): string {
+  const addressAs = opts.userFirstName?.trim() || 'the person you are talking to';
+
+  return `
+You are talking out loud with ${addressAs}, who is preparing for a
+conversation they are dreading. Shortly, an AI is going to have that
+conversation on their behalf, live, with a real person who will push back, get
+emotional, and say things nobody planned for. Your job is to find out enough
+that the AI can hold its own in that room and actually get somewhere.
+
+This is a spoken conversation. ${addressAs} can hear you and you can hear them.
+
+Open by asking what is going on — warmly, in one short sentence — and then let
+them talk.
+
+${interviewCore(addressAs)}
+
+## Speaking, specifically
+
+- Keep questions SHORT. A written question can be re-read; a spoken one
+  cannot. If it does not fit in one breath, it is too long.
+- Let them ramble. People work out what they actually mean partway through a
+  sentence, and the useful thing is usually at the end of it. Do not cut in,
+  and do not fill every silence — a pause is often someone deciding whether to
+  tell you the real version.
+- Never read anything out as a list, and never number your questions out loud.
+- Do not summarise everything back at each step. One short acknowledgement,
+  then the next question.
+- Never mention tools, briefs, fields, extraction, or anything about how this
+  works under the hood. You are having a conversation.
+
+## How to signal you are finished
+
+Say one short closing line out loud — something like "Okay, I think I've got
+what I need" — and then call the finish_interview tool. Do not keep talking
+after that, and do not describe what you are about to do.
 `.trim();
 }
 
@@ -360,5 +460,52 @@ export function buildExtractionMessages(
   return [
     { role: 'system', content: buildExtractionInstructions() },
     { role: 'user', content: lines.join('\n\n') },
+  ];
+}
+
+/**
+ * Generous compared to the typed cap, because a spoken transcript is not the
+ * same shape: there is no one-question-one-answer rhythm, people trail off and
+ * restart, and the model backchannels. Still bounded, since this array is
+ * client-supplied and every entry costs tokens at extraction time.
+ */
+export const MAX_SPOKEN_TURNS = 80;
+
+export const SpokenTranscriptSchema = z.object({
+  userFirstName: z.string().max(100).optional(),
+  turns: z.array(InterviewTurnSchema).min(1).max(MAX_SPOKEN_TURNS),
+});
+export type SpokenTranscript = z.infer<typeof SpokenTranscriptSchema>;
+
+/**
+ * Extraction messages for a spoken interview.
+ *
+ * Reuses `buildExtractionInstructions()` unchanged — that prompt is about
+ * reading a finished interview and sorting what it finds, which is
+ * modality-agnostic. Only the transcript rendering differs, and only because a
+ * spoken interview has no separate opening "situation" the way the typed one
+ * does; it is turns all the way down.
+ */
+export function buildSpokenExtractionMessages(
+  request: SpokenTranscript,
+): Array<{ role: 'system' | 'user'; content: string }> {
+  const lines = request.turns.map((turn) =>
+    turn.role === 'assistant'
+      ? `Interviewer asked: ${turn.text.trim()}`
+      : `They said: ${turn.text.trim()}`,
+  );
+  if (request.userFirstName?.trim()) {
+    lines.push(`Their first name is ${request.userFirstName.trim()}.`);
+  }
+
+  return [
+    { role: 'system', content: buildExtractionInstructions() },
+    {
+      role: 'user',
+      content:
+        'This interview was spoken out loud and transcribed, so expect ' +
+        'false starts and filler. Read through them.\n\n' +
+        lines.join('\n\n'),
+    },
   ];
 }

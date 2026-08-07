@@ -318,3 +318,117 @@ describe('POST /conversation/session', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('POST /conversation/interview-session — the spoken interview', () => {
+  const secretResponse = {
+    value: 'ek_interview_123',
+    expires_at: Math.floor(Date.now() / 1000) + 60,
+    session: { model: 'gpt-realtime-2.1', audio: { output: { voice: 'cedar' } } },
+  };
+
+  it('503s when OpenAI is not configured', async () => {
+    const res = await makeApp({}).fetch(
+      turn('/conversation/interview-session', {}),
+      {} as never,
+    );
+    expect(res.status).toBe(503);
+  });
+
+  it('registers the finish tool — a voice session has no done flag to set', async () => {
+    const requests = stubOpenAi([secretResponse]);
+    const res = await makeApp().fetch(
+      turn('/conversation/interview-session', { userFirstName: 'Sam' }),
+      {} as never,
+    );
+
+    const session = requests[0]!.body.session;
+    expect(session.tools).toHaveLength(1);
+    expect(session.tools[0].name).toBe('finish_interview');
+    expect(session.tool_choice).toBe('auto');
+
+    // Returned so the client watches for the tool the server actually
+    // registered, rather than hardcoding a second copy of the name.
+    const body = (await res.json()) as any;
+    expect(body.finishToolName).toBe('finish_interview');
+  });
+
+  it('turns on input transcription — without it the transcript has no answers', async () => {
+    const requests = stubOpenAi([secretResponse]);
+    await makeApp().fetch(
+      turn('/conversation/interview-session', {}),
+      {} as never,
+    );
+    expect(requests[0]!.body.session.audio.input.transcription).toBeDefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('sends the spoken interview prompt, not the typed one', async () => {
+    const requests = stubOpenAi([secretResponse]);
+    await makeApp().fetch(
+      turn('/conversation/interview-session', { userFirstName: 'Sam' }),
+      {} as never,
+    );
+    const instructions = requests[0]!.body.session.instructions as string;
+    expect(instructions).toMatch(/This is a spoken conversation/i);
+    expect(instructions).toMatch(/finish_interview/);
+    // The shared substance still has to be there.
+    expect(instructions).toContain('"What do you want me to say?"');
+    expect(instructions).toMatch(/Three things are non-negotiable/i);
+    vi.unstubAllGlobals();
+  });
+
+  it('never leaks the API key on failure', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response('bad key sk-test-secret', { status: 401 }),
+    );
+    const res = await makeApp().fetch(
+      turn('/conversation/interview-session', {}),
+      {} as never,
+    );
+    expect(res.status).toBe(502);
+    expect(await res.text()).not.toContain('sk-test-secret');
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('POST /conversation/extract', () => {
+  it('503s when OpenAI is not configured', async () => {
+    const res = await makeApp({}).fetch(
+      turn('/conversation/extract', { turns: [{ role: 'user', text: 'hi' }] }),
+      {} as never,
+    );
+    expect(res.status).toBe(503);
+  });
+
+  it('400s on an empty transcript without calling OpenAI', async () => {
+    const requests = stubOpenAi([]);
+    const res = await makeApp().fetch(
+      turn('/conversation/extract', { turns: [] }),
+      {} as never,
+    );
+    expect(res.status).toBe(400);
+    expect(requests).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the intent built from a spoken transcript', async () => {
+    const requests = stubOpenAi([asCompletion(intent)]);
+    const res = await makeApp().fetch(
+      turn('/conversation/extract', {
+        userFirstName: 'Sam',
+        turns: [
+          { role: 'assistant', text: "What's going on?" },
+          { role: 'user', text: 'I need to fix things with Alex.' },
+        ],
+      }),
+      {} as never,
+    );
+    const body = (await res.json()) as any;
+    expect(res.status).toBe(200);
+    expect(body.intent.goal).toBe(intent.goal);
+    // Warned about speech artefacts, and given the raised ceiling.
+    expect(requests[0]!.body.messages[1].content).toMatch(/false starts and filler/i);
+    expect(requests[0]!.body.max_completion_tokens).toBeGreaterThan(400);
+    vi.unstubAllGlobals();
+  });
+});
