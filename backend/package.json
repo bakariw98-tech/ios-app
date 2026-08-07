@@ -9,6 +9,7 @@
     "db:init": "wrangler d1 execute conversation-delegation --remote --file=./schema.sql",
     "mcp": "tsx src/mcp/server.ts",
     "test": "vitest run",
+    "evals": "tsx evals/run.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

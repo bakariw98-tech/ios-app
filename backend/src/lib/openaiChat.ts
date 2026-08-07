@@ -23,8 +23,16 @@
  */
 export const INTAKE_MODEL = 'gpt-5.6-luna';
 
-/** A question or a paragraph, never more — keeps latency and cost bounded per turn. */
-const MAX_COMPLETION_TOKENS = 400;
+/**
+ * A question or a paragraph, never more — keeps latency and cost bounded per
+ * turn for the intake/interview loops, which is what this default is sized
+ * for. Callers producing a whole structured object (the conversation intent
+ * in `domain/conversationIntent.ts` runs to a dozen fields, several of them
+ * arrays) must raise it via `maxCompletionTokens` — at 400 that response is
+ * silently truncated mid-JSON and surfaces as an unparseable-reply error a
+ * long way from the cause.
+ */
+const DEFAULT_MAX_COMPLETION_TOKENS = 400;
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -39,6 +47,8 @@ export interface StructuredCompletionRequest {
   schemaName: string;
   /** The literal JSON Schema object — see INTAKE_REPLY_JSON_SCHEMA's doc comment on why hand-written. */
   jsonSchema: Record<string, unknown>;
+  /** Override for callers returning a full object rather than one question — see DEFAULT_MAX_COMPLETION_TOKENS. */
+  maxCompletionTokens?: number;
 }
 
 /**
@@ -60,7 +70,8 @@ export async function runStructuredCompletion(
     body: JSON.stringify({
       model,
       messages: request.messages,
-      max_completion_tokens: MAX_COMPLETION_TOKENS,
+      max_completion_tokens:
+        request.maxCompletionTokens ?? DEFAULT_MAX_COMPLETION_TOKENS,
       response_format: {
         type: 'json_schema',
         json_schema: {
