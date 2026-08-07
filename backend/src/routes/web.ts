@@ -91,6 +91,7 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   body[data-state="idle"] .screen-brief,
   body[data-state="failed"] .screen-brief { display: block; }
   body[data-state="intake"] .screen-intake { display: block; }
+  body[data-state="review"] .screen-review { display: block; }
   body[data-state="connecting"] .screen-connecting { display: block; }
   body[data-state="live"] .screen-live { display: block; }
   body[data-state="ended"] .screen-ended { display: block; }
@@ -157,6 +158,42 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   }
   .intake-q { background: #e5e7eb; color: #111; align-self: flex-start; }
   .intake-a { background: #2563eb; color: white; align-self: flex-end; }
+
+  /* Engine selector. The two engines answer different questions — one relays
+     a prepared request to someone who wants to help you, the other negotiates
+     a goal with someone who may not. Same UI shell, different endpoints. */
+  .engine-row {
+    display: flex; gap: 8px; margin: 4px 0 20px; border: 1px solid #333;
+    border-radius: 8px; padding: 4px;
+  }
+  .engine-button {
+    flex: 1; padding: 10px 8px; border: none; border-radius: 6px;
+    background: transparent; color: #999; cursor: pointer; font-size: 0.85rem;
+    text-align: center; line-height: 1.3;
+  }
+  .engine-button.active { background: #1f2937; color: white; }
+  .engine-button small { display: block; font-size: 0.7rem; opacity: 0.7; margin-top: 2px; }
+
+  /* The intent review card. Exists so the extracted goal and limits are
+     visible BEFORE going live — this is the fastest way to see whether the
+     interview actually drew the right things out, which is the part most
+     likely to be wrong. */
+  .intent-card {
+    border: 1px solid #333; border-radius: 8px; padding: 16px; margin: 16px 0;
+    font-size: 0.85rem; line-height: 1.5;
+  }
+  .intent-card h3 {
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: #888; margin: 14px 0 4px; font-weight: 600;
+  }
+  .intent-card h3:first-child { margin-top: 0; }
+  .intent-card p { margin: 0; }
+  .intent-card ul { margin: 0; padding-left: 18px; }
+  .intent-card li { margin: 2px 0; }
+  .intent-card .goal { font-size: 1rem; font-weight: 600; color: #fff; }
+  .intent-card .limit { color: #f87171; }
+  .intent-card .room { color: #4ade80; }
+  .intent-card .muted { color: #777; font-style: italic; }
   .intake-row { display: flex; gap: 8px; margin-top: 6px; }
   .intake-row input { flex: 1; }
   .intake-row button { width: auto; margin-top: 0; padding: 10px 16px; }
@@ -208,16 +245,39 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   </p>
 
   <div class="screen screen-brief">
+    <div class="engine-row">
+      <button class="engine-button" id="engineTransactional">
+        Transactional
+        <small>relay a request</small>
+      </button>
+      <button class="engine-button active" id="engineConversation">
+        Hard conversation
+        <small>negotiate a goal</small>
+      </button>
+    </div>
+
     <label for="nameInput">Your name (optional)</label>
     <input type="text" id="nameInput" placeholder="Sam">
 
-    <label for="situationInput">What do you need said?</label>
+    <label for="situationInput" id="situationLabel">What do you need to talk to them about?</label>
     <textarea id="situationInput" maxlength="4000"
-      placeholder='e.g. "I&#39;m at McDonald&#39;s, I want a McDouble no pickles and a water."'></textarea>
+      placeholder="e.g. &quot;I need to talk to my friend Alex. We haven&#39;t spoken since March and I want to fix it.&quot;"></textarea>
 
-    <button class="btn-primary" id="startButton" disabled>Next — a couple of quick questions</button>
+    <button class="btn-primary" id="startButton" disabled>Next — a few quick questions</button>
 
     <div class="error-banner" id="errorBanner"></div>
+  </div>
+
+  <div class="screen screen-review">
+    <p class="subtitle">
+      Here&rsquo;s what it understood. Check the goal and the limits before you
+      start &mdash; this is what it will actually be working from.
+    </p>
+
+    <div class="intent-card" id="intentCard"></div>
+
+    <button class="btn-primary" id="goLiveButton">Start talking</button>
+    <button class="btn-skip" id="reviewBackButton">Back</button>
   </div>
 
   <div class="screen screen-intake">
@@ -314,6 +374,9 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   //                            checker confirm the enriched paragraph reached it unchanged
   //   window.__sessionStart    the parsed GET /session/start response, once the Phone call
   //                            tab has been opened — { phoneNumber, instructions }
+  //   window.__engine          'conversation' | 'transactional' — which engine is selected
+  //   window.__intent          the extracted ConversationIntent, once the interview finishes
+  //                            (conversation engine only; null for the transactional one)
   // ---------------------------------------------------------------------
   window.__sentLog = [];
   window.__intakeTurns = [];
@@ -331,6 +394,13 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   const callButton = $('callButton');
   const callInstructionBefore = $('callInstructionBefore');
   const callInstructionMerge = $('callInstructionMerge');
+
+  const engineTransactional = $('engineTransactional');
+  const engineConversation = $('engineConversation');
+  const situationLabel = $('situationLabel');
+  const intentCard = $('intentCard');
+  const goLiveButton = $('goLiveButton');
+  const reviewBackButton = $('reviewBackButton');
 
   const situationInput = $('situationInput');
   const nameInput = $('nameInput');
@@ -359,6 +429,55 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   function log(line) {
     const time = new Date().toISOString().slice(11, 19);
     debugLog.textContent = \`[\${time}] \${line}\\n\` + debugLog.textContent;
+  }
+
+  // --- Engine selector -------------------------------------------------
+  //
+  // 'conversation' is the default: it's the engine under active development
+  // and the one worth exercising. 'transactional' keeps the original
+  // relay-a-brief path reachable so a regression in it is still visible.
+
+  let engine = 'conversation';
+
+  const ENGINE_COPY = {
+    conversation: {
+      label: 'What do you need to talk to them about?',
+      placeholder:
+        "e.g. \\"I need to talk to my friend Alex. We haven't spoken since March and I want to fix it.\\"",
+      next: 'Next — a few quick questions',
+    },
+    transactional: {
+      label: 'What do you need said?',
+      placeholder:
+        "e.g. \\"I'm at McDonald's, I want a McDouble no pickles and a water.\\"",
+      next: 'Next — a couple of quick questions',
+    },
+  };
+
+  engineTransactional.addEventListener('click', () => setEngine('transactional'));
+  engineConversation.addEventListener('click', () => setEngine('conversation'));
+
+  function setEngine(next) {
+    engine = next;
+    window.__engine = engine;
+    engineConversation.classList.toggle('active', next === 'conversation');
+    engineTransactional.classList.toggle('active', next === 'transactional');
+    const copy = ENGINE_COPY[next];
+    situationLabel.textContent = copy.label;
+    situationInput.placeholder = copy.placeholder;
+    startButton.textContent = copy.next;
+  }
+
+  // Called on load so window.__engine and the copy are correct from the start,
+  // not only after the first click. Idempotent — the markup already ships in
+  // the conversation-engine state.
+  setEngine('conversation');
+
+  /** The endpoint pair for the selected engine — the only real difference between them. */
+  function endpoints() {
+    return engine === 'conversation'
+      ? { turn: '/conversation/turn', session: '/conversation/session' }
+      : { turn: '/intake/turn', session: '/realtime/session' };
   }
 
   // --- Mode tabs (in-person vs. phone-call) ---------------------------
@@ -446,9 +565,27 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   // once Skip has already moved on, so a late reply can't yank the user back
   // into the intake screen after they've chosen to leave it.
   skipButton.addEventListener('click', () => {
+    if (engine === 'conversation') {
+      // The conversation engine has nothing to go live WITH until the intent
+      // has been extracted — the interview is the product here, not a warm-up
+      // to it. So Skip can't be the synchronous local bail-out it is for the
+      // transactional engine; instead it says "just go" in the user's own
+      // voice, which the interview prompt already treats as a hard stop, and
+      // lets the server extract from whatever it has. One round trip, but it
+      // cannot produce a session with no goal in it.
+      intakeTurns.push({ role: 'user', text: "that's it, just go" });
+      window.__intakeTurns = intakeTurns;
+      appendIntakeBubble('intake-a', "that's it, just go");
+      postIntakeTurn(situationInput.value.trim());
+      return;
+    }
     intakeAbandoned = true;
     goLive(window.__situationSoFar || situationInput.value.trim());
   });
+
+  goLiveButton.addEventListener('click', () => goLive());
+
+  reviewBackButton.addEventListener('click', () => setState('intake'));
 
   stopButton.addEventListener('click', () => {
     // The primary interrupt path. One tap, no typing. See the .btn-stop
@@ -478,6 +615,9 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     intakeTurns = [];
     window.__intakeTurns = intakeTurns;
     window.__situationSoFar = '';
+    currentIntent = null;
+    window.__intent = null;
+    intentCard.innerHTML = '';
     intakeAbandoned = false;
     startButton.disabled = true;
     setState('idle');
@@ -486,6 +626,8 @@ export const WEB_CLIENT_HTML = `<!doctype html>
   let pc = null;
   let dc = null;
   let intakeTurns = [];
+  /** The extracted ConversationIntent, held between the review screen and going live. */
+  let currentIntent = null;
   // Set true the instant Skip is clicked, so a late-arriving /intake/turn
   // response (the user skipped while a request was in flight) is a no-op
   // rather than something that could still move the UI.
@@ -534,9 +676,11 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     intakeStatus.textContent = 'Thinking…';
     intakeError.hidden = true;
 
+    const turnUrl = endpoints().turn;
+
     let reply;
     try {
-      const res = await fetch('/intake/turn', {
+      const res = await fetch(turnUrl, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -547,7 +691,7 @@ export const WEB_CLIENT_HTML = `<!doctype html>
       });
       const parsedBody = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(\`/intake/turn \${res.status}: \${parsedBody.error || 'unknown error'}\${parsedBody.detail ? \` — \${parsedBody.detail}\` : ''}\`);
+        throw new Error(\`\${turnUrl} \${res.status}: \${parsedBody.error || 'unknown error'}\${parsedBody.detail ? \` — \${parsedBody.detail}\` : ''}\`);
       }
       reply = parsedBody;
     } catch (error) {
@@ -571,7 +715,19 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     intakeStatus.textContent = '';
 
     if (reply.done) {
-      goLive(reply.situation);
+      // The two engines finish differently: the transactional one returns a
+      // paragraph and goes straight live, the conversation one returns a
+      // structured intent that gets shown for review first. Seeing the goal
+      // and the limits before going live is the fastest way to catch an
+      // interview that drew out the wrong thing.
+      if (engine === 'conversation') {
+        currentIntent = reply.intent;
+        window.__intent = currentIntent;
+        renderIntentCard(currentIntent);
+        setState('review');
+      } else {
+        goLive(reply.situation);
+      }
       return;
     }
 
@@ -580,11 +736,45 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     appendIntakeBubble('intake-q', reply.question);
   }
 
+  function renderIntentCard(intent) {
+    const esc = (s) =>
+      String(s ?? '').replace(/[&<>]/g, (ch) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch],
+      );
+    const list = (items, className) =>
+      items && items.length
+        ? \`<ul class="\${className}">\${items.map((i) => \`<li>\${esc(i)}</li>\`).join('')}</ul>\`
+        : '<p class="muted">none</p>';
+
+    intentCard.innerHTML = [
+      '<h3>Goal</h3>',
+      \`<p class="goal">\${esc(intent.goal)}</p>\`,
+      '<h3>Speaking to</h3>',
+      \`<p>\${esc(intent.recipientName)} — \${esc(intent.relationship.replace(/_/g, ' '))}, \${esc(intent.tone)} tone</p>\`,
+      '<h3>Background it will work from</h3>',
+      \`<p>\${esc(intent.context)}</p>\`,
+      '<h3>Room to negotiate — it can offer these on its own</h3>',
+      list(intent.acceptableCompromises, 'room'),
+      '<h3>Will never agree to</h3>',
+      list(intent.hardLimits, 'limit'),
+      '<h3>Will never bring up</h3>',
+      list(intent.neverSay, 'limit'),
+      '<h3>Must get said</h3>',
+      list(intent.mustSay, ''),
+      '<h3>Wants to find out</h3>',
+      list(intent.questionsToAnswer, ''),
+    ].join('');
+  }
+
   function goLive(situation) {
-    start({
-      situation,
-      userFirstName: nameInput.value.trim() || undefined,
-    }).catch((error) => {
+    // The conversation engine sends the reviewed intent; the transactional one
+    // sends the enriched paragraph, unchanged from what it always sent.
+    const payload =
+      engine === 'conversation'
+        ? { intent: currentIntent }
+        : { situation, userFirstName: nameInput.value.trim() || undefined };
+
+    start(payload).catch((error) => {
       console.error(error);
       setState('failed', String(error && error.message ? error.message : error));
     });
@@ -592,10 +782,11 @@ export const WEB_CLIENT_HTML = `<!doctype html>
 
   async function start(brief) {
     window.__startedWith = brief;
+    const sessionUrl = endpoints().session;
     setState('connecting');
-    log('POSTing brief to /realtime/session…');
+    log(\`POSTing to \${sessionUrl}…\`);
 
-    const res = await fetch('/realtime/session', {
+    const res = await fetch(sessionUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(brief),
@@ -604,7 +795,7 @@ export const WEB_CLIENT_HTML = `<!doctype html>
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(
-        \`/realtime/session \${res.status}: \${body.error || 'unknown error'}\`
+        \`\${sessionUrl} \${res.status}: \${body.error || 'unknown error'}\`
       );
     }
 

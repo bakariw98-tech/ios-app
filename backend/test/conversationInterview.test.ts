@@ -139,6 +139,25 @@ describe('question discipline', () => {
     expect(prompt).toMatch(/stop\s+immediately,\s+whatever\s+you\s+still\s+don't\s+know/i);
   });
 
+  it('refuses to finish without the compromise room', () => {
+    // Regression guard for a real failure caught on a live run: with a vaguer
+    // stop condition ("you could brief someone cold"), the interview finished
+    // after three questions having captured the goal and both limits but an
+    // EMPTY acceptableCompromises. That is not a short interview, it is a
+    // failed one — an intent with no negotiating room degrades the negotiator
+    // back into the relay this engine exists to replace, since it can then
+    // only restate its position or interrupt the user.
+    expect(prompt).toMatch(/Three\s+things\s+are\s+non-negotiable/i);
+    expect(prompt).toMatch(/The\s+room\s+to\s+move/i);
+    expect(prompt).toMatch(
+      /Getting\s+the\s+goal\s+and\s+the\s+limits\s+but\s+no\s+room\s+to\s+move\s+is\s+not\s+a\s+short\s+interview,\s+it\s+is\s+a\s+failed\s+one/i,
+    );
+  });
+
+  it('explains what an empty compromise room costs, not just that it is required', () => {
+    expect(prompt).toMatch(/only\s+restate\s+its\s+opening\s+position/i);
+  });
+
   it('derives the turn cap from the question cap', () => {
     expect(MAX_INTERVIEW_TURNS).toBe(MAX_INTERVIEW_QUESTIONS * 2);
   });

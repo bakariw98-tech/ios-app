@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 
 import { type Config, type Env, buildConfig } from './lib/config.js';
 import { D1Store, type Store } from './lib/store.js';
+import { registerConversationRoutes } from './routes/conversation.js';
 import { registerIntakeRoutes } from './routes/intake.js';
 import { registerRealtimeRoutes } from './routes/realtime.js';
 import { registerSessionRoutes } from './routes/session.js';
@@ -52,6 +53,7 @@ export function buildApp(options: AppOptions = {}) {
   registerSessionRoutes(app);
   registerRealtimeRoutes(app);
   registerIntakeRoutes(app);
+  registerConversationRoutes(app);
   registerTwilioRoutes(app);
   registerWebRoutes(app);
 

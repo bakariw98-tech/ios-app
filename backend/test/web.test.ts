@@ -167,3 +167,61 @@ describe('GET /web — phone-call tab', () => {
     expect(body).not.toContain('VAPI_WEBHOOK_SECRET');
   });
 });
+
+describe('GET /web — the conversation engine', () => {
+  it('offers both engines and defaults to the conversation one', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('id="engineConversation"');
+    expect(body).toContain('id="engineTransactional"');
+    // The default matters: this is the engine under active development, and
+    // shipping the page defaulted to the old relay path would mean nobody
+    // exercises the new one by accident.
+    expect(body).toMatch(
+      /<button class="engine-button active" id="engineConversation">/,
+    );
+    expect(body).toMatch(/let\s+engine\s*=\s*'conversation'/);
+  });
+
+  it('routes each engine to its own endpoint pair', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain("'/conversation/turn'");
+    expect(body).toContain("'/conversation/session'");
+    expect(body).toContain("'/intake/turn'");
+    expect(body).toContain("'/realtime/session'");
+  });
+
+  it('shows the extracted intent for review before going live', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('screen-review');
+    expect(body).toContain('id="intentCard"');
+    expect(body).toContain('id="goLiveButton"');
+    // The goal and both kinds of limit have to be visible on that card —
+    // reviewing an intent that hides what it will refuse is pointless.
+    expect(body).toMatch(/Room\s+to\s+negotiate/i);
+    expect(body).toMatch(/Will\s+never\s+agree\s+to/i);
+    expect(body).toMatch(/Will\s+never\s+bring\s+up/i);
+  });
+
+  it('escapes intent text before putting it in the DOM', async () => {
+    // The intent is model-generated from user-supplied text and rendered via
+    // innerHTML, so it goes through an escaper. Without this the review card
+    // is an injection sink fed by whatever the user typed.
+    const body = await (await getWebPage()).text();
+    expect(body).toMatch(/replace\(\/\[&<>\]\/g/);
+  });
+
+  it('never lets the conversation engine start a session without an intent', async () => {
+    const body = await (await getWebPage()).text();
+    // Skip is synchronous-and-local for the transactional engine, but the
+    // conversation engine has nothing to go live with until extraction has
+    // run — so its Skip goes through the server instead.
+    expect(body).toMatch(/that's it, just go/);
+    expect(body).toMatch(/engine === 'conversation'/);
+  });
+
+  it('exposes window.__engine and window.__intent as test hooks', async () => {
+    const body = await (await getWebPage()).text();
+    expect(body).toContain('window.__engine');
+    expect(body).toContain('window.__intent');
+  });
+});
